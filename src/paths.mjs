@@ -3,9 +3,9 @@ import os from "node:os"
 import path from "node:path"
 
 export function dataDir(env = process.env) {
-  if (env.MAGPIE_PLAIN_ZH_HOME) return env.MAGPIE_PLAIN_ZH_HOME
+  if (env.MAGPIE_TRANSLATOR_HOME) return env.MAGPIE_TRANSLATOR_HOME
   const xdg = env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share")
-  return path.join(xdg, "magpie-plain-zh")
+  return path.join(xdg, "magpie-translator")
 }
 
 export function inboxDir(env = process.env) {

@@ -1,14 +1,15 @@
 {
-  "name": "magpie-plain-zh",
+  "name": "magpie-translator",
   "version": "0.1.0",
-  "description": "magpie 旁路转述插件：用已配置的任意模型把选定工作模型的最终回复转述出来，译文不进入原模型的会话",
+  "description": "magpie plugin: translate one model's final reply with another configured model, into any target language, without writing the translation into the original session",
   "type": "module",
   "bin": {
-    "magpie-plain-zh": "./src/panel.mjs"
+    "magpie-translator": "./src/panel.mjs"
   },
   "files": [
     "src",
     "README.md",
+    "README.zh-CN.md",
     "docs/DESIGN.md",
     "LICENSE"
   ],
