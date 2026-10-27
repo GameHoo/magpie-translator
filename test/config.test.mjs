@@ -8,7 +8,7 @@ import { parseDisplay, presentation } from "../src/config.mjs"
 import { MARKER } from "../src/constants.mjs"
 import { onResponse } from "../src/hooks.mjs"
 import { startPanel } from "../src/panel.mjs"
-import { systemPrompt } from "../src/prompt.mjs"
+import { defaultTask, systemPrompt } from "../src/prompt.mjs"
 import { translateJob } from "../src/translate.mjs"
 
 test("默认提示词带上目标语言，自定义提示词换掉任务句", () => {
@@ -24,6 +24,27 @@ test("默认提示词带上目标语言，自定义提示词换掉任务句", ()
   assert.equal(custom.includes("Rewrite the user's text into plain, easy-to-read English"), false)
   assert.match(custom, new RegExp(MARKER))
   assert.match(custom, /Output only the rewritten text/)
+})
+
+test("自定义提示词里的占位符只替换一次", () => {
+  const filled = systemPrompt({
+    language: "Français",
+    prompt: "Rewrite into {language}. Work model {model}. Translator {translator}. Tone {style}. Keep {tone}.",
+    style: "short {language}",
+    model: "vendor/work",
+    translator: "vendor/helper",
+  })
+  assert.match(filled, /Rewrite into Français\./)
+  assert.match(filled, /Work model vendor\/work\./)
+  assert.match(filled, /Translator vendor\/helper\./)
+  assert.match(filled, /Tone short Français\./)
+  assert.match(filled, /Keep \{tone\}\./)
+  assert.match(filled, /short Français/)
+  assert.equal(filled.includes("{language}"), false)
+  assert.equal(filled.includes("{model}"), false)
+  assert.match(filled, new RegExp(MARKER))
+  assert.match(filled, /Output only the rewritten text/)
+  assert.equal(defaultTask("Français"), systemPrompt({ language: "Français" }).split("\n")[1])
 })
 
 test("非中文目标语言写进默认提示词，提示本身不含中文", () => {
