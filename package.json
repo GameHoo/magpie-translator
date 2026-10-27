@@ -8,6 +8,7 @@
   },
   "files": [
     "src",
+    "ui",
     "README.md",
     "README.zh-CN.md",
     "docs/DESIGN.md",
@@ -25,7 +26,8 @@
   "keywords": [
     "magpie",
     "magpie-hooks",
-    "translation"
+    "translation",
+    "magpie-plugin"
   ],
   "license": "MIT",
   "engines": {
@@ -33,13 +35,34 @@
   },
   "magpie": {
     "hooks": "./src/hooks.mjs",
+    "middleware": "./src/middleware.mjs",
+    "icon": "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%0A%20%20%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2214%22%20fill%3D%22%231c1915%22%2F%3E%0A%20%20%3Cpath%20fill%3D%22%23f4efe6%22%20d%3D%22M14%2040c8-20%2022-24%2036-14-8%203-12%209-8%2015%207%201%209%208%203%2012-11-1-18%200-26%205-6-5-9-10-5-18z%22%2F%3E%0A%20%20%3Ccircle%20cx%3D%2242%22%20cy%3D%2227%22%20r%3D%222%22%20fill%3D%22%231c1915%22%2F%3E%0A%3C%2Fsvg%3E",
+    "page": {
+      "title": "Translations",
+      "titles": { "zh": "转述记录" },
+      "file": "ui/history.html",
+      "icon": "ui/icon.svg"
+    },
+    "panels": [
+      {
+        "slot": "settings",
+        "file": "ui/settings.html",
+        "title": "Translator",
+        "titles": { "zh": "旁路转述" }
+      }
+    ],
+    "permissions": ["providers:list", "usage:summary"],
     "options": {
       "gatewayTimeoutMs": 2000,
       "panelPort": 44721,
       "language": "简体中文",
       "prompt": "",
       "style": "",
-      "display": ["panel", "log"],
+      "display": ["log"],
+      "localPanel": false,
+      "rewriteSameLanguage": false,
+      "translateTimeoutMs": 120000,
+      "historyLimit": 500,
       "rules": []
     }
   }
