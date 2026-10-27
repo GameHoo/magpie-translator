@@ -27,7 +27,7 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 
    本地目录同样可以：`magpie plugin add /path/to/magpie-translator`。这时名字就是那条路径。
 
-3. 写规则。`model` 和 `translator` 换成第 1 步的 id。`rules` 为空时什么都不翻译。下面的例子把命中的工作模型译成英文，把 Claude 译成日文：
+3. 写规则。`translator` 用第 1 步的 id。`model` 可以是那条 id，也可以是末尾加 `*` 的前缀。下一节说明前缀怎么匹配。`rules` 为空时什么都不翻译。下面的例子把命中的工作模型译成英文，把 Claude 译成日文。`gpt-5*` 和 `claude-*` 是前缀，不是从 `magpie models` 原样抄下来的一行：
 
    ```bash
    magpie plugin options <名字> '{
@@ -52,7 +52,7 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 
 4. 让工作模型经 magpie 回答一轮。把 magpie 已经在路由的客户端（Codex、Claude Code 或其他客户端）指到 magpie，再问它一句。然后打开 <http://127.0.0.1:44721>。还没有命中的回复时，页面上写着还没有译文。命中之后，卡片上的语言、工作模型和翻译模型来自这一轮的配置。页面上的按钮和说明是中文。译文用的是卡片上的 `language`，不是页面外壳的语言。
 
-下面两张图是 2026-10-27 用 `npm run demo` 打开的页面，窗口宽 1440 像素。标题和按钮是中文。卡片上的语言行是这一轮的 `language`，这两张图里是 `简体中文`。
+下面两张图是 2026-10-27 用 `npm run demo` 打开的页面，窗口宽 1440 像素。标题和按钮是中文。卡片上的语言行是这一轮的 `language`，这两张图里是 `简体中文`。图脚的端口是 44751，因为那次运行设置了 `MAGPIE_TRANSLATOR_PORT`。不设端口时，`npm run demo` 用 44721。
 
 翻译完成时，围栏里的命令保持原样。文件：`docs/panel_success.png`。
 
@@ -65,6 +65,18 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 `npm run demo` 用的是本机假的翻译模型，所以这次失败是连不上。真实翻译模型返回错误时，错误文字出现在同一位置。
 
 `package.json` 里的 `magpie.options` 只是示例。生效的是 `magpie plugin options` 写进去的那份。
+
+## 设置页
+
+打开 <http://127.0.0.1:44721/settings>（端口以 `panelPort` 为准）。这个表单改的是 `plugins.json` 里本插件的那一条，和 `magpie plugin options` 同一份。保存只动这一条，别的插件不动。已经在跑的 magpie 会在下一轮请求读到新文件，不用重启。已经开始的那一轮仍用旧配置。
+
+可以改全局的语言、提示词、style 和展示方式，也可以添加、修改、删除、调整规则顺序。翻译模型从 magpie 列出的 id 里选，也可以手填一个列表里没有的 id。提示词是多行的。点「恢复默认」会清空那一栏；空着就用默认任务句。`gatewayKey`、`panelPort`、`magpieBaseUrl`、`gatewayTimeoutMs` 不在表单上，保存时按已经存着的值留下。
+
+页面只监听 127.0.0.1。只有这个设置页自己能保存。别的地址上的页面不能。下面这张图是 2026-10-27 的设置页，窗口宽 1440 像素。文件：`docs/panel_settings.png`。
+
+![设置页。全局语言是 English，提示词里有 {language}，两条规则分别写了翻译模型、模型匹配和单独的目标语言。](docs/panel_settings.png)
+
+文件怎么对上这条插件，以及为什么 hook 不调用 `magpie.options.set`，写在 [docs/DESIGN.md](docs/DESIGN.md)。
 
 ## 规则怎么匹配
 
@@ -89,15 +101,17 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
 | `language` | `简体中文` | 嵌进默认提示词的语言名。任意名字都可以，如 `English`、`日本語`、`Français` |
-| `prompt` | 空 | 只换掉任务句，最长 4000 字。三样仍在：用来避免翻译请求再被翻译的内部记号、占位符规则、`Output only the rewritten text.` |
+| `prompt` | 空 | 只换掉任务句，最长 4000 字。自定义句子里可以写 `{language}`、`{style}`、`{model}`、`{translator}`，发给翻译模型前替换一次。不认识的 `{token}` 原样留下。三样仍在：用来避免翻译请求再被翻译的内部记号、占位符规则、`Output only the rewritten text.` |
 | `style` | 空 | 追加一句口气，最长 4000 字 |
 | `display` | `panel,log` | 见下表 |
 | `panelPort` | `44721` | 页面端口，只监听 127.0.0.1 |
 | `webhookUrl` | 空 | `display` 含 `webhook` 时使用，须是 http 或 https |
 
-默认任务句是：
+默认任务句会把语言名字直接写进去。`language` 为 `English` 时，这一句是：
 
-`Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary.`
+`Rewrite the user's text into plain, easy-to-read English. Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary.`
+
+默认句里不再留着 `{language}` 这四个字。只有你自己写的 `prompt` 或 `style` 里，才用 `{language}` 表示「这里换成这一轮的目标语言」。
 
 这两句始终保留：
 
@@ -124,11 +138,11 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 node src/panel.mjs
 ```
 
-用路径装上时，`magpie plugin list` 印出的就是这个目录。它和 hook 共用上面的数据目录，会把收件箱里的任务译出来。
+用路径装上时，`magpie plugin list` 印出的就是这个目录。用 github 装上时，`plugin list` 印出 `github:GameHoo/magpie-translator`，那是交给 `plugin options` 的名字，不是目录。文件在 `~/.config/magpie/plugins/node_modules/magpie-translator`。设置了 `XDG_CONFIG_HOME` 时，把 `~/.config` 换成它。在那个目录里运行 `node src/panel.mjs`。两种装法都和 hook 共用上面的数据目录，会把收件箱里的任务译出来。
 
 ## 哪些字会送去翻译
 
-只送面向用户的最终正文。工具调用、推理、思考块不送。magpie 给每个请求标四种 JSON 形状之一：`chat`、`responses`、`anthropic`、`gemini`。Codex 通常是 `responses`。Claude Code 是 `anthropic`。普通聊天应用是 `chat`。有工具调用时，`anthropic`、`chat`、`gemini` 整段不送。`responses` 只保留标成最终回答的正文，铺垫句和其他没标成最终回答的文字不送。
+只送面向用户的最终正文。工具调用、推理、思考块不送。magpie 给每个请求标四种 JSON 形状之一：`chat`、`responses`、`anthropic`、`gemini`。Codex 通常是 `responses`。Claude Code 是 `anthropic`。普通聊天应用是 `chat`。有工具调用时，`anthropic`、`chat`、`gemini` 整段不送。`responses` 这一轮里有工具调用时，只保留 `phase` 为 `final_answer` 的正文。这一轮没有工具调用时，即使正文没有 `phase` 也会送去翻译。铺垫句不送。
 
 围栏代码、没合上的代码围栏、行内代码、以 `$ ` 开头的命令行会换成占位符再送。译文回来后按原样嵌回。翻译模型弄丢的那几段补在末尾，已经嵌回的不重复。整段都是代码时不发送。遮罩后超过 20000 个字符时从第 20000 个字符处截断，不找段落边界，页面会标明截断。
 
