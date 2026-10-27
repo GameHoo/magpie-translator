@@ -27,7 +27,7 @@ You need a local magpie that is already running, at version 0.1.1273 or later, a
 
    A local checkout works the same way: `magpie plugin add /path/to/magpie-translator`. The name is then that path.
 
-3. Write the rules. Replace `model` and `translator` with ids from step 1. An empty `rules` array translates nothing. This example translates matching work models into English, and Claude models into Japanese:
+3. Write the rules. `translator` is an id from step 1. `model` can be one of those ids, or a prefix that ends with `*`. The next section says how a prefix matches. An empty `rules` array translates nothing. This example translates matching work models into English, and Claude models into Japanese. `gpt-5*` and `claude-*` are prefixes, not lines copied from `magpie models`:
 
    ```bash
    magpie plugin options <name> '{
@@ -52,7 +52,7 @@ You need a local magpie that is already running, at version 0.1.1273 or later, a
 
 4. Let the work model answer one turn through magpie. Point the client magpie already routes (Codex, Claude Code, or another client) at magpie, then ask it something. Open <http://127.0.0.1:44721>. Before any matching reply, the page says there is no translation yet. After one, the card shows the language, work model, and translator from that turn. The page chrome is Chinese. The language of the translation is the `language` on the card, not the language of the chrome.
 
-The two pictures below are that page in a 1440-pixel-wide window, taken on 2026-10-27 from `npm run demo`. Headings and buttons stay Chinese. The language line on each card is that turn's `language`. In these pictures it is `简体中文`.
+The two pictures below are that page in a 1440-pixel-wide window, taken on 2026-10-27 from `npm run demo`. Headings and buttons stay Chinese. The language line on each card is that turn's `language`. In these pictures it is `简体中文`. The footer shows port 44751 because that run set `MAGPIE_TRANSLATOR_PORT`. With no port set, `npm run demo` uses 44721.
 
 A finished card keeps fenced commands in their original form. File: `docs/panel_success.png`.
 
@@ -65,6 +65,18 @@ A card whose translator cannot be reached keeps the original sentence and shows 
 `npm run demo` uses a fake translator on this machine, so this failure is a connection error. A live translator that returns an error shows that error text in the same place.
 
 `magpie.options` inside `package.json` is only an example. The live config is what `magpie plugin options` writes.
+
+## Settings page
+
+Open <http://127.0.0.1:44721/settings> (or the port in `panelPort`). The form edits the same `plugins.json` entry as `magpie plugin options`. Saving writes that entry and leaves every other plugin alone. A magpie that is already running reads the new file on the next request. You do not restart it. A reply that has already started keeps the old options.
+
+You can set the global language, prompt, style, and display, and you can add, edit, delete, and reorder rules. Pick a translator from the model list magpie reports, or type an id that is not in the list. The prompt box is multiple lines. 恢复默认 clears it; an empty prompt uses the default task sentence. `gatewayKey`, `panelPort`, `magpieBaseUrl`, and `gatewayTimeoutMs` are not on the form. Saving keeps the values already stored.
+
+The page listens on 127.0.0.1 only. This page can save. A page at any other address cannot. The picture below is that page in a 1440-pixel-wide window, taken on 2026-10-27. File: `docs/panel_settings.png`.
+
+![Settings page. Global language is English, the prompt contains {language}, and two rules list a translator, a model pattern, and a per-rule language.](docs/panel_settings.png)
+
+How the file is chosen, and why the hook does not call `magpie.options.set`, is in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## How a rule matches
 
@@ -89,15 +101,17 @@ Vendor API keys stay in `magpie provider`. Leave `gatewayKey` unset unless your 
 | Field | Default | What it does |
 | --- | --- | --- |
 | `language` | `简体中文` | The language name inserted into the default prompt. Any name works, such as `English`, `日本語`, or `Français` |
-| `prompt` | empty | Replaces only the task sentence, up to 4000 characters. Three pieces stay: an internal marker so the plugin does not translate its own request, the placeholder rule, and "Output only the rewritten text." |
+| `prompt` | empty | Replaces only the task sentence, up to 4000 characters. A custom sentence may contain `{language}`, `{style}`, `{model}`, and `{translator}`. They are replaced once, when the translator request is built. Any other `{token}` stays as written. Three pieces stay: an internal marker so the plugin does not translate its own request, the placeholder rule, and "Output only the rewritten text." |
 | `style` | empty | One extra line about tone, up to 4000 characters |
 | `display` | `panel,log` | See the next table |
 | `panelPort` | `44721` | Page port. Listens on 127.0.0.1 only |
 | `webhookUrl` | empty | Used when `display` includes `webhook`. Must be http or https |
 
-The default task sentence is:
+The default task sentence, with the language name already filled in, is:
 
-`Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary.`
+`Rewrite the user's text into plain, easy-to-read English. Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary.`
+
+That example uses `English`. The name in the sentence is whatever `language` is for that turn. `{language}` is not left in the default sentence. Write `{language}` only in a custom `prompt` or `style` when you want the name substituted there.
 
 These two lines are always kept:
 
@@ -124,11 +138,11 @@ If the page does not open, run this as the same user, from the directory that co
 node src/panel.mjs
 ```
 
-For a path install, `magpie plugin list` prints that directory. It shares the data directory with the hook and translates jobs already in the inbox.
+For a path install, `magpie plugin list` prints that directory. A github install prints `github:GameHoo/magpie-translator`, which is the name you pass to `plugin options`. The files are in `~/.config/magpie/plugins/node_modules/magpie-translator`. If `XDG_CONFIG_HOME` is set, replace `~/.config` with it. Run `node src/panel.mjs` in that directory. Either way, the page shares the data directory with the hook and translates jobs already in the inbox.
 
 ## What gets translated
 
-Only the final prose a person is meant to read. Tool calls, reasoning, and thinking blocks are left out. Magpie labels each request with one of four JSON shapes: `chat`, `responses`, `anthropic`, or `gemini`. Codex usually uses `responses`. Claude Code uses `anthropic`. A typical chat app uses `chat`. When a turn contains a tool call, `anthropic`, `chat`, and `gemini` turns are skipped entirely. A `responses` turn keeps only text marked as the final answer. Commentary and other text that is not marked final is skipped.
+Only the final prose a person is meant to read. Tool calls, reasoning, and thinking blocks are left out. Magpie labels each request with one of four JSON shapes: `chat`, `responses`, `anthropic`, or `gemini`. Codex usually uses `responses`. Claude Code uses `anthropic`. A typical chat app uses `chat`. When a turn contains a tool call, `anthropic`, `chat`, and `gemini` turns are skipped entirely. A `responses` turn that contains a tool call keeps only text whose `phase` is `final_answer`. A `responses` turn with no tool call is translated even when the text has no `phase`. Commentary is skipped.
 
 Fenced code, an unclosed fence, inline code, and lines that start with `$ ` are replaced with placeholders before the translator sees them, then restored. Placeholders the translator drops are appended at the end. Slots that were restored are not repeated. A turn that is only code is not sent. After masking, text longer than 20000 characters is cut at character 20000. The page marks that cut.
 
