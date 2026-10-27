@@ -9,8 +9,8 @@ import { MARKER } from "../src/constants.mjs"
 import { maskCode } from "../src/mask.mjs"
 import { startPanel } from "../src/panel.mjs"
 
-const PORT = Number(process.env.MAGPIE_PLAIN_ZH_PORT || 44721)
-const HOME = process.env.MAGPIE_PLAIN_ZH_HOME || "/tmp/magpie-plain-zh-demo"
+const PORT = Number(process.env.MAGPIE_TRANSLATOR_PORT || 44721)
+const HOME = process.env.MAGPIE_TRANSLATOR_HOME || "/tmp/magpie-translator-demo"
 
 const EN1 = "The cache invalidates when the file mtime changes."
 const EN2 = "Run that when the entry looks stale."
