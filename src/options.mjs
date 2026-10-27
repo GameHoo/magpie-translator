@@ -2,11 +2,11 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { DEFAULT_DISPLAY, DEFAULT_LANGUAGE, parseDisplay } from "./config.mjs"
+import { DEFAULT_DISPLAY, DEFAULT_LANGUAGE, parseDisplay, parseFlag, parseHistoryLimit, parseTimeout } from "./config.mjs"
 
 export const MAX_NOTE = 4000
 export const MAX_RULES = 40
-export const EDITABLE = ["language", "prompt", "style", "display", "webhookUrl", "rules"]
+export const EDITABLE = ["language", "prompt", "style", "display", "webhookUrl", "rules", "translateTimeoutMs", "rewriteSameLanguage", "localPanel", "historyLimit"]
 const RULE_FIELDS = new Set(["agent", "model", "translator", "language", "prompt", "style", "display", "webhookUrl"])
 const SKIP_KEYS = new Set(["__proto__", "constructor", "prototype"])
 
@@ -201,6 +201,18 @@ export function normalizeSettings(input, previous = {}) {
     if (error) return { error }
   }
   if (display.inherit) return { error: "展示方式至少选一个" }
+  const timeout = input.translateTimeoutMs == null || input.translateTimeoutMs === ""
+    ? parseTimeout(prior.translateTimeoutMs)
+    : parseTimeout(input.translateTimeoutMs)
+  const historyLimit = input.historyLimit == null || input.historyLimit === ""
+    ? parseHistoryLimit(prior.historyLimit)
+    : parseHistoryLimit(input.historyLimit)
+  const rewrite = input.rewriteSameLanguage == null
+    ? parseFlag(prior.rewriteSameLanguage, false)
+    : parseFlag(input.rewriteSameLanguage, false)
+  const localPanel = input.localPanel == null
+    ? parseFlag(prior.localPanel, false)
+    : parseFlag(input.localPanel, false)
   if (!Array.isArray(input.rules)) return { error: "rules 必须是数组" }
   if (input.rules.length > MAX_RULES) return { error: `规则最多 ${MAX_RULES} 条` }
   const rules = []
@@ -217,6 +229,11 @@ export function normalizeSettings(input, previous = {}) {
   options.display = display.value
   if (webhook) options.webhookUrl = webhook
   options.rules = rules
+  options.translateTimeoutMs = timeout
+  options.rewriteSameLanguage = rewrite
+  options.localPanel = localPanel
+  options.historyLimit = historyLimit
+  delete options._compare
   return { options }
 }
 
@@ -231,6 +248,10 @@ export function viewOptions(options = {}) {
     display: parseDisplay(source.display),
     webhookUrl: typeof source.webhookUrl === "string" ? source.webhookUrl : "",
     rules: rules.filter((rule) => rule && typeof rule === "object").map(viewRule),
+    translateTimeoutMs: parseTimeout(source.translateTimeoutMs),
+    rewriteSameLanguage: parseFlag(source.rewriteSameLanguage, false),
+    localPanel: parseFlag(source.localPanel, false),
+    historyLimit: parseHistoryLimit(source.historyLimit),
     preserved,
   }
 }
@@ -308,6 +329,10 @@ function emptyView() {
     display: [...DEFAULT_DISPLAY],
     webhookUrl: "",
     rules: [],
+    translateTimeoutMs: parseTimeout(undefined),
+    rewriteSameLanguage: false,
+    localPanel: false,
+    historyLimit: parseHistoryLimit(undefined),
     preserved: [],
   }
 }
