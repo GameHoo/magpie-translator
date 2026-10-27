@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url"
 import { parseDisplay, parseFlag } from "./config.mjs"
 import { DEFAULT_GATEWAY_KEY, DEFAULT_PANEL_PORT } from "./constants.mjs"
 import { noteCompare } from "./hooks.mjs"
-import { addComparison, recordTranslation } from "./history.mjs"
+import { addComparison, recordTranslation, replaceTranslation } from "./history.mjs"
 import { listModels } from "./models.mjs"
 import { findPlugin, loadSettings, packageRoot, readPluginList, saveSettings } from "./options.mjs"
 import { dataDir, ensureDir, inboxDir, logPath, magpieBaseUrl } from "./paths.mjs"
@@ -476,6 +476,7 @@ async function runJob(job, env, state, openHttp) {
       masked: job.masked || "",
       slots: job.slots || [],
       magpieBaseUrl: job.magpieBaseUrl || "",
+      truncated: !!job.truncated,
     }, env, job.historyLimit)
   } catch (err) {
     console.error(err)
@@ -492,13 +493,15 @@ async function runCompare(job, env) {
   } catch (err) {
     error = err?.message || String(err)
   }
-  addComparison(job.entryId, {
+  const patch = {
     id: job.id,
     translator: job.translator || "",
     translation,
     error,
     ms: Date.now() - started,
-  }, env)
+  }
+  if (job.replace) replaceTranslation(job.entryId, patch, env)
+  else addComparison(job.entryId, patch, env)
 }
 
 const PAGE = `<!doctype html>
@@ -649,7 +652,7 @@ function card(item) {
   const body = item.status === "error"
     ? '<p class="status error">' + escapeHtml(item.error || "转述失败") + "</p>" + note + rich(item.original)
     : note + rich(item.translation || (item.status === "translating" ? "…" : ""))
-  const lang = item.language ? '<span>' + escapeHtml(item.language) + "</span>" : ""
+  const lang = item.language ? "<span>" + escapeHtml(item.language) + "</span>" : ""
   return '<article data-id="' + escapeHtml(item.id) + '">'
     + '<div class="meta"><span>' + escapeHtml(who) + "</span>" + lang + '<span>→ ' + escapeHtml(item.translator || "") + '</span>'
     + '<span class="status ' + escapeHtml(item.status) + '">' + status + '</span><span>' + escapeHtml(when) + '</span></div>'
