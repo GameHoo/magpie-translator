@@ -2,6 +2,9 @@ import { createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import { dataDir, ensureDir, writeAtomic } from "./paths.mjs"
+import { processStartTime } from "./proc.mjs"
+
+export const INBOX_CAP = 100
 
 export function inboxDir(env = process.env) {
   return path.join(dataDir(env), "inbox")
@@ -11,12 +14,30 @@ export function processingDir(env = process.env) {
   return path.join(dataDir(env), "processing")
 }
 
+function capInbox(env, keepName) {
+  const dir = inboxDir(env)
+  const names = listInbox(env).filter((name) => name !== keepName)
+  if (names.length < INBOX_CAP) return
+  const ranked = names.map((name) => {
+    const file = path.join(dir, name)
+    let mtime = 0
+    try { mtime = fs.statSync(file).mtimeMs } catch { /* 读不到就当最旧 */ }
+    return { name, mtime }
+  }).sort((a, b) => a.mtime - b.mtime || a.name.localeCompare(b.name))
+  const extra = names.length - (INBOX_CAP - 1)
+  for (let i = 0; i < extra; i += 1) {
+    try { fs.unlinkSync(path.join(dir, ranked[i].name)) } catch { /* 已经被拿走 */ }
+  }
+}
+
 export function enqueue(job, env = process.env) {
   const dir = inboxDir(env)
   ensureDir(dir)
   const id = String(job?.id || "")
   if (!id) throw new Error("任务没有 id")
-  const file = path.join(dir, `${id}.json`)
+  const name = `${id}.json`
+  capInbox(env, name)
+  const file = path.join(dir, name)
   writeAtomic(file, `${JSON.stringify(job)}\n`)
   return file
 }
@@ -29,14 +50,20 @@ export function listInbox(env = process.env) {
   }
 }
 
-function alive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false
+function ownerStillRunning(record) {
+  const pid = Number(record?.pid ?? record?.ownerPid)
+  if (!pid || pid === process.pid) return false
+  const start = processStartTime(pid)
+  if (!start || !record?.startTime) return false
+  return start === String(record.startTime)
+}
+
+export function queueDepth(env = process.env) {
+  let processing = 0
   try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
+    processing = fs.readdirSync(processingDir(env)).filter((name) => name.endsWith(".json") && !name.startsWith("compare-")).length
+  } catch { /* 还没有这个目录 */ }
+  return listInbox(env).length + processing
 }
 
 function readJson(file) {
@@ -61,15 +88,13 @@ export function recoverProcessing(env = process.env) {
     const from = path.join(processing, name)
     if (name.startsWith("compare-")) {
       const current = readJson(from)
-      const pid = Number(current?.pid)
-      if (!pid || !alive(pid)) {
+      if (!ownerStillRunning(current)) {
         try { fs.unlinkSync(from) } catch { /* 另一个工人刚收走 */ }
       }
       continue
     }
     const job = readJson(from)
-    const owner = Number(job?.ownerPid)
-    if (owner && alive(owner) && owner !== process.pid) continue
+    if (ownerStillRunning({ pid: job?.ownerPid, startTime: job?.ownerStart })) continue
     const to = path.join(inbox, name)
     try {
       fs.renameSync(from, to)
@@ -95,6 +120,7 @@ export function takeJob(env = process.env) {
       continue
     }
     job.ownerPid = process.pid
+    job.ownerStart = processStartTime(process.pid)
     try { writeAtomic(to, `${JSON.stringify(job)}\n`) } catch { /* 认领已经成立 */ }
     job.__claim = to
     return job
@@ -137,12 +163,11 @@ export function claimCompare(env, body) {
   const dir = processingDir(env)
   ensureDir(dir)
   const file = path.join(dir, compareClaimName(body.nonce))
-  const payload = { ...body, pid: process.pid, at: Date.now() }
+  const payload = { ...body, pid: process.pid, startTime: processStartTime(process.pid), at: Date.now() }
   if (createNew(file, payload)) return file
   const current = readJson(file)
-  const pid = Number(current?.pid)
-  if (pid && pid !== process.pid && alive(pid)) return ""
-  if (pid === process.pid && inflightCompare.has(String(body.nonce))) return ""
+  if (ownerStillRunning(current)) return ""
+  if (Number(current?.pid) === process.pid && inflightCompare.has(String(body.nonce))) return ""
   try { fs.unlinkSync(file) } catch { /* 对方刚删 */ }
   if (createNew(file, payload)) return file
   return ""

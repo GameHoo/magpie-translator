@@ -122,9 +122,9 @@ The panel writes the same `options` object as the CLI, in magpie's `plugins.json
 | History | `historyLimit` | 500 | 100, 500, 1000, 5000, or `0` to keep none |
 | Rules | `rules` | `[]` | Empty means do nothing |
 | Prompt | `prompt` | empty | Placeholders: `{language}` `{style}` `{model}` `{translator}` |
-| Gateway key | stored as `gateway.key` | empty | Loopback is accepted with no key. A value typed here is saved once, then the worker moves it to `gateway.key` in the data directory (mode 0600) and deletes it from `plugins.json`. Leave the box blank to keep the key already stored |
+| Gateway key | stored as `gateway.key` | empty | Loopback on this machine is accepted with no key. A remote `magpieBaseUrl` needs `gateway.key`. A value typed here is saved once, then the worker moves it to `gateway.key` in the data directory (mode 0600) and deletes it from `plugins.json`. Leave the box blank to keep the key already stored |
 
-CLI-only: `display` (`log`, `file`, `stdout`, `notify`, `webhook`; default `["log"]`), `webhookUrl`, `magpieBaseUrl`, `maskCode` (default off), `allowRemoteExport` (default off). `notify` and `webhook` run only when you list them in `display`, and only for a request whose origin is `local`, unless `allowRemoteExport` is on. This package does not set `gatewayTimeoutMs`, so the hook keeps magpie's own short limit. The model call is not inside the hook. The worker sends `Authorization` only when `gateway.key` exists. `MAGPIE_TRANSLATOR_GATEWAY_KEY` is read only when that file is absent.
+CLI-only: `display` (`log`, `file`, `stdout`, `notify`, `webhook`; default `["log"]`), `webhookUrl`, `magpieBaseUrl`, `maskCode` (default off), `allowRemoteExport` (default off). `notify` and `webhook` run only when you list them in `display`, and only for a request whose origin is `local`, unless `allowRemoteExport` is on. This package does not set `gatewayTimeoutMs`, so the hook keeps magpie's own short limit. The model call is not inside the hook. The worker sends `Authorization` only when `gateway.key` exists. `MAGPIE_TRANSLATOR_GATEWAY_KEY` is read only when that file is absent. A remote `magpieBaseUrl` needs `gateway.key`. Loopback on this machine does not.
 
 ## History page
 
@@ -149,14 +149,15 @@ Full history stays on disk, mode `0600`:
 - `$MAGPIE_TRANSLATOR_HOME`, or `$XDG_DATA_HOME/magpie-translator`, or `~/.local/share/magpie-translator/`
 - `history.json` — full rows, including the text that was sent and the prompt used for compare. No gateway key
 - `log.jsonl`, `latest.txt` (when `display` includes `file`), `compare-seen.json`
-- `inbox/*.json` — one file per rewrite. The worker claims it by renaming it into `processing/`
-- `processing/` — a claimed job, or a compare claim. On startup the worker picks up files whose owner process is gone
+- `inbox/*.json` — one file per rewrite, at most 100. The worker claims a file by renaming it into `processing/`
+- `processing/` — a claimed job, or a compare claim. The worker picks up a file whose owner start time no longer matches
+- `delivered/` — one marker per job id already stored, so a replay does not send the webhook again
 - `feed.json` — the same public slice, rewritten only when its JSON changes
 - `feed-state.json` — when the summary was last copied into plugin options
-- `worker.lock` — pid, source hash, and parent pid of the one worker
-- `gateway.key` — optional gateway key, mode 0600
+- `worker.lock` — pid, process start time, random token, source hash, and parent pid
+- `gateway.key` — optional gateway key, mode 0600. A remote `magpieBaseUrl` needs this file
 
-The hook does not write `plugins.json`. The worker writes `options.feed` only when the summary changed, and it moves a `gatewayKey` out to `gateway.key`. Both writes are a temp file renamed into place. A settings save strips `feed` and `models`. The page drops `feed` before it saves, so a settings save does not send the summary back. A real change to `plugins.json` restarts the magpie hook host on the next gateway request. An unchanged summary does not touch the file, so it does not restart the host.
+The hook does not write `plugins.json`. The worker writes `options.feed` only when the summary changed and the queue is empty. It re-reads `plugins.json` and copies that feed onto the latest contents. It removes `gatewayKey` only when the value is still the one just moved into `gateway.key`. If the file changes again before the write, that attempt is skipped. A settings save that sees newer bytes leaves the file alone. A settings save also strips `feed` and `models`. The page drops `feed` before it saves, so a settings save does not send the summary back. A real change to `plugins.json` restarts the magpie hook host on the next gateway request. An unchanged summary does not touch the file, so it does not restart the host.
 
 The original is sent only to the translator model you configured, through the local magpie gateway. The plugin opens no port of its own. Webhook and desktop notifications stay off unless you opt in, and they are skipped for anything that is not a local request. The body has no gateway key.
 
@@ -166,7 +167,7 @@ The original is sent only to the translator model you configured, through the lo
 
 `onResponse` in `src/hooks.mjs` writes one job file and returns. It does not call a model. `onRequest` does not rewrite the body. It only marks the plugin's own request so that request is not queued again. `magpie plugin list` still prints `async gateway hook onRequest` for every async hook. That string is magpie's.
 
-Magpie aborts a hook at `gatewayTimeoutMs` (at most 10 seconds; this package leaves the host default, which is shorter). A real rewrite takes longer than that, so the call runs in `src/worker.mjs`. One worker holds `worker.lock`. Its environment is the path, home, and config variables it needs, plus the parent pid. It does not receive the rest of the host environment, and it does not receive a gateway key. It exits when that parent exits, when the plugin is turned off, or when the plugin entry is gone from `plugins.json`. It waits up to `translateTimeoutMs` (10 seconds to 10 minutes, default 2 minutes). Loading the hook starts it, and so does a new job. Compare and retry read `_compare` from options and run in that worker. They do not wait for another reply. A compare nonce is claimed with an exclusive file and marked seen only after the result is stored. A crash before that runs the compare again. A model error that was recorded does not run again.
+Magpie aborts a hook at `gatewayTimeoutMs` (at most 10 seconds; this package leaves the host default, which is shorter). A real rewrite takes longer than that, so the call runs in `src/worker.mjs`. One worker holds `worker.lock`. The lock records the pid, the process start time, and a random token. A signal is sent only when all three match. Its environment is the path, home, and config variables it needs, plus the parent pid and the lock token. The rest of the host environment stays out, including any gateway key. When the parent exits, the worker finishes the current job, drains the queue, writes the summary only when the queue is empty, and then exits. It also exits when the plugin is turned off, or when the plugin entry is gone from `plugins.json`. Each job id is stored once and sent to a webhook once. It waits up to `translateTimeoutMs` (10 seconds to 10 minutes, default 2 minutes). Loading the hook starts it, and so does a new job. Compare and retry read `_compare` from options and run in that worker. They pick up a stranded job without waiting for another reply. A compare nonce is claimed with an exclusive file and marked seen only after the result is stored. A crash before that runs the compare again. A model error that was recorded does not run again.
 
 There is no middleware. Bytes that pass through the gateway are not changed. A Codex stream whose `response.completed` has no output is still invisible.
 

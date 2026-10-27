@@ -7,9 +7,9 @@ import { test } from "bun:test"
 import { gatewayKeyPath } from "../src/auth.mjs"
 import { FEED_BUDGET, hasSeen, markSeen, publicFeed, recordTranslation, writePublicFeed } from "../src/history.mjs"
 import { packageRoot, syncHostSurface } from "../src/options.mjs"
-import { enqueue, processingDir, recoverProcessing } from "../src/queue.mjs"
+import { enqueue, INBOX_CAP, listInbox, processingDir, recoverProcessing } from "../src/queue.mjs"
 import { minimalEnv } from "../src/worker.mjs"
-import { alive, processCompare, processOnce } from "../src/worker.mjs"
+import { alive, parentGone, processCompare, processOnce } from "../src/worker.mjs"
 
 function tempHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-durable-"))
@@ -250,6 +250,109 @@ test("工人环境只留下路径和父进程号", () => {
   assert.equal(env.MAGPIE_TRANSLATOR_GATEWAY_KEY, undefined)
   assert.equal(env.SENTINEL_SECRET, undefined)
   assert.equal(env.MAGPIE_TRANSLATOR_NO_SPAWN, undefined)
+  assert.equal(env.MAGPIE_TRANSLATOR_LOCK_TOKEN, undefined)
   assert.equal(alive(process.pid), true)
   fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("收件箱最多留下 100 条，最新的还在", () => {
+  const home = tempHome()
+  for (let i = 0; i < INBOX_CAP + 5; i += 1) {
+    enqueue(job({ id: `n-${String(i).padStart(3, "0")}` }), process.env)
+  }
+  const names = listInbox(process.env)
+  assert.equal(names.length, INBOX_CAP)
+  assert.equal(names.includes("n-104.json"), true)
+  assert.equal(names.includes("n-000.json"), false)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("plugins.json 在写入前被改过时只合上 feed，新的密钥留着", () => {
+  const home = tempHome()
+  const file = writePlugins(home, { language: "English", theme: "plain", gatewayKey: "old-key" })
+  const list = JSON.parse(fs.readFileSync(file, "utf8"))
+  list.plugins.push({ spec: "other-plugin", options: { keep: true } })
+  fs.writeFileSync(file, `${JSON.stringify(list, null, 2)}\n`)
+  recordTranslation({ id: "row-1", original: "Hello there from the model.", translation: "你好", translator: "mock/zh", at: "2026-10-27T00:00:00.000Z" }, process.env, 20)
+  const result = syncHostSurface(process.env, {
+    debounceMs: 0,
+    minIntervalMs: 0,
+    now: 10000,
+    beforeWrite(target) {
+      const latest = JSON.parse(fs.readFileSync(target, "utf8"))
+      latest.plugins[0].options.language = "日本語"
+      latest.plugins[0].options.theme = "night"
+      latest.plugins[0].options.gatewayKey = "new-key"
+      latest.plugins[1].options.extra = 1
+      fs.writeFileSync(target, `${JSON.stringify(latest, null, 2)}\n`)
+    },
+  })
+  assert.equal(result.wrote, true)
+  assert.equal(result.reason, "merged")
+  const after = JSON.parse(fs.readFileSync(file, "utf8"))
+  assert.equal(after.plugins[0].options.language, "日本語")
+  assert.equal(after.plugins[0].options.theme, "night")
+  assert.equal(after.plugins[0].options.gatewayKey, "new-key")
+  assert.equal(after.plugins[0].options.feed.entries[0].translation, "你好")
+  assert.equal(after.plugins[1].options.keep, true)
+  assert.equal(after.plugins[1].options.extra, 1)
+  assert.equal(fs.readFileSync(gatewayKeyPath(process.env), "utf8").trim(), "old-key")
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("同一个任务只记一行，webhook 也只发一次", async () => {
+  const home = tempHome()
+  writePlugins(home, { language: "English" })
+  let hooks = 0
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(req) {
+      if (new URL(req.url).pathname === "/hook") {
+        hooks += 1
+        return new Response("ok")
+      }
+      return new Response("no")
+    },
+  })
+  try {
+    const fetchImpl = okFetch("一次")
+    const body = job({
+      id: "dup-1",
+      display: ["webhook"],
+      origin: "local",
+      webhookUrl: `http://127.0.0.1:${server.port}/hook`,
+    })
+    enqueue(body, process.env)
+    assert.equal(await processOnce(process.env, { fetchImpl }), true)
+    enqueue(body, process.env)
+    assert.equal(await processOnce(process.env, { fetchImpl }), true)
+    assert.equal(fetchImpl.calls, 1)
+    assert.equal(hooks, 1)
+    const rows = JSON.parse(fs.readFileSync(path.join(home, "history.json"), "utf8"))
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].translation, "一次")
+  } finally {
+    server.stop(true)
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("父进程已经不在时，手头的任务仍然做完", async () => {
+  const home = tempHome()
+  writePlugins(home, { language: "English" })
+  process.env.MAGPIE_TRANSLATOR_PARENT_PID = "999999"
+  try {
+    assert.equal(parentGone(process.env), true)
+    enqueue(job({ id: "still-done" }), process.env)
+    const fetchImpl = okFetch("做完了")
+    assert.equal(await processOnce(process.env, { fetchImpl }), true)
+    assert.equal(fetchImpl.calls, 1)
+    const rows = JSON.parse(fs.readFileSync(path.join(home, "history.json"), "utf8"))
+    assert.equal(rows[0].translation, "做完了")
+    assert.equal(rows[0].error, "")
+  } finally {
+    delete process.env.MAGPIE_TRANSLATOR_PARENT_PID
+    fs.rmSync(home, { recursive: true, force: true })
+  }
 })

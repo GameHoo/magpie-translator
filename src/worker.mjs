@@ -1,14 +1,15 @@
 import { spawn } from "node:child_process"
-import { createHash } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { gatewayKeyFor } from "./auth.mjs"
 import { presentation } from "./config.mjs"
-import { recordTranslation, replaceTranslation, addComparison, findHistory, hasSeen, markSeen, restoreFeed, writePublicFeed } from "./history.mjs"
+import { recordTranslation, replaceTranslation, addComparison, findHistory, hasSeen, markDelivered, markSeen, restoreFeed, wasDelivered, writePublicFeed } from "./history.mjs"
 import { findPlugin, pluginPresence, pluginTurnedOff, readPluginList, syncHostSurface } from "./options.mjs"
-import { dataDir, ensureDir, magpieBaseUrl } from "./paths.mjs"
-import { claimCompare, finishClaim, holdCompare, recoverProcessing, takeJob } from "./queue.mjs"
+import { dataDir, ensureDir, magpieBaseUrl, writeAtomic } from "./paths.mjs"
+import { pidExists, processStartTime, sameProcess, signalWorker } from "./proc.mjs"
+import { claimCompare, finishClaim, holdCompare, queueDepth, recoverProcessing, takeJob } from "./queue.mjs"
 import { persistItem } from "./sinks.mjs"
 import { translateJob } from "./translate.mjs"
 
@@ -18,21 +19,17 @@ const PASSTHROUGH = ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CT
 
 function sourceHash() {
   const hash = createHash("sha256")
-  for (const name of ["worker.mjs", "translate.mjs", "mask.mjs", "queue.mjs", "hooks.mjs", "history.mjs", "options.mjs"]) {
+  for (const name of ["worker.mjs", "translate.mjs", "mask.mjs", "queue.mjs", "hooks.mjs", "history.mjs", "options.mjs", "proc.mjs"]) {
     hash.update(fs.readFileSync(path.join(HERE, name)))
   }
   return hash.digest("hex").slice(0, 16)
 }
 
 export function alive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
+  return pidExists(pid)
 }
+
+export { signalWorker, sameProcess }
 
 export function shouldSpawn(env = process.env) {
   return env.MAGPIE_TRANSLATOR_NO_SPAWN !== "1"
@@ -42,7 +39,7 @@ export function lockPath(env = process.env) {
   return path.join(dataDir(env), "worker.lock")
 }
 
-export function minimalEnv(env, dir = dataDir(env)) {
+export function minimalEnv(env, dir = dataDir(env), token = "") {
   const out = {}
   for (const key of PASSTHROUGH) {
     const value = env[key]
@@ -50,6 +47,8 @@ export function minimalEnv(env, dir = dataDir(env)) {
   }
   out.MAGPIE_TRANSLATOR_HOME = dir
   out.MAGPIE_TRANSLATOR_PARENT_PID = String(process.pid)
+  if (token) out.MAGPIE_TRANSLATOR_LOCK_TOKEN = String(token)
+  if (env.MAGPIE_TRANSLATOR_HOLD_AFTER_RECORD) out.MAGPIE_TRANSLATOR_HOLD_AFTER_RECORD = env.MAGPIE_TRANSLATOR_HOLD_AFTER_RECORD
   return out
 }
 
@@ -83,38 +82,84 @@ function stopError() {
   return err
 }
 
-async function acquireWorkerLock(dir, hash, parent) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// 过期锁用 rename 拿走，再 link 自己的文件。rename 和 link 都是原子的。
+export async function acquireWorkerLock(dir, hash, parent, token = process.env.MAGPIE_TRANSLATOR_LOCK_TOKEN) {
+  ensureDir(dir)
+  const id = String(token || randomBytes(16).toString("hex"))
+  process.env.MAGPIE_TRANSLATOR_LOCK_TOKEN = id
   const file = path.join(dir, "worker.lock")
-  const body = `${JSON.stringify({ pid: process.pid, hash, parent: Number(parent) || 0 })}\n`
-  for (let i = 0; i < 40; i += 1) {
+  const mine = {
+    pid: process.pid,
+    startTime: processStartTime(process.pid),
+    token: id,
+    hash,
+    parent: Number(parent) || 0,
+  }
+  const privateFile = path.join(dir, `worker.lock.${id}`)
+  writeAtomic(privateFile, `${JSON.stringify(mine)}\n`)
+  for (let i = 0; i < 50; i += 1) {
     try {
-      const fd = fs.openSync(file, "wx", 0o600)
-      fs.writeFileSync(fd, body)
-      fs.closeSync(fd)
+      fs.linkSync(privateFile, file)
+      try { fs.unlinkSync(privateFile) } catch { /* 锁已经链上 */ }
       return true
     } catch (err) {
-      if (err?.code !== "EEXIST") return false
-      const current = readLock(file)
-      const pid = Number(current?.pid)
-      if (pid && pid !== process.pid && alive(pid)) {
-        await new Promise((resolve) => setTimeout(resolve, 50))
-        continue
+      if (err?.code !== "EEXIST") {
+        try { fs.unlinkSync(privateFile) } catch { /* 没有临时文件 */ }
+        return false
       }
-      try { fs.unlinkSync(file) } catch { /* 对方刚退出 */ }
     }
+    const current = readLock(file)
+    if (current && Number(current.pid) === process.pid && String(current.token) === id && sameProcess(current)) {
+      try { fs.unlinkSync(privateFile) } catch { /* 没有临时文件 */ }
+      return true
+    }
+    if (sameProcess(current)) {
+      if (current.hash !== hash) signalWorker(current, "SIGTERM")
+      else {
+        try { fs.unlinkSync(privateFile) } catch { /* 没有临时文件 */ }
+        return false
+      }
+      await sleep(50)
+      continue
+    }
+    const staleToken = String(current?.token || "missing")
+    const again = readLock(file)
+    if (String(again?.token || "missing") !== staleToken || sameProcess(again)) continue
+    const grave = path.join(dir, `worker.lock.dead.${staleToken}`)
+    try { fs.renameSync(file, grave) } catch { continue }
+    const moved = readLock(grave)
+    if (String(moved?.token || "missing") !== staleToken || sameProcess(moved)) {
+      try { fs.linkSync(grave, file) } catch { /* 名字已经被占 */ }
+      try { fs.unlinkSync(grave) } catch { /* 已经还回去了 */ }
+      continue
+    }
+    try { fs.unlinkSync(grave) } catch { /* 过期锁可以留着 */ }
   }
+  try { fs.unlinkSync(privateFile) } catch { /* 没有临时文件 */ }
   return false
 }
 
-function releaseWorkerLock(dir) {
+function releaseWorkerLock(dir, token) {
   const file = path.join(dir, "worker.lock")
-  try {
-    const current = readLock(file)
-    if (Number(current?.pid) === process.pid) fs.unlinkSync(file)
-  } catch { /* 锁已经没了 */ }
+  const current = readLock(file)
+  if (!current) return
+  if (String(current.token) !== String(token)) return
+  if (Number(current.pid) !== process.pid) return
+  if (String(current.startTime) !== processStartTime(process.pid)) return
+  const grave = path.join(dir, `worker.lock.dead.${token}`)
+  try { fs.renameSync(file, grave) } catch { return }
+  const moved = readLock(grave)
+  if (String(moved?.token) !== String(token)) {
+    try { fs.linkSync(grave, file) } catch { /* 新主人已经放上锁 */ }
+  }
+  try { fs.unlinkSync(grave) } catch { /* 已经不在 */ }
 }
 
-// 工人自己用独占锁保证只有一个。父进程退出或插件关掉之后，下一轮循环就停。
+// 活着的工人，pid、启动时刻和 token 都对得上，就不发信号。父进程没了也让它把队列做完。
 export function ensureWorker(env = process.env) {
   if (!shouldSpawn(env)) return false
   const dir = dataDir(env)
@@ -122,18 +167,16 @@ export function ensureWorker(env = process.env) {
   const hash = sourceHash()
   const file = path.join(dir, "worker.lock")
   const current = readLock(file)
-  if (current && alive(Number(current.pid))) {
-    const same = current.hash === hash && alive(Number(current.parent))
-    if (same) return false
-    try { process.kill(Number(current.pid), "SIGTERM") } catch { /* 正在退出 */ }
-  } else if (current) {
-    try { fs.unlinkSync(file) } catch { /* 对方刚清掉 */ }
+  if (sameProcess(current)) {
+    if (current.hash === hash) return false
+    signalWorker(current, "SIGTERM")
   }
+  const token = randomBytes(16).toString("hex")
   const child = spawn(process.execPath, [WORKER_SCRIPT], {
     detached: true,
     stdio: "ignore",
     cwd: dir,
-    env: minimalEnv(env, dir),
+    env: minimalEnv(env, dir, token),
   })
   child.unref()
   return true
@@ -143,34 +186,52 @@ function scrub(job) {
   const clean = { ...job }
   delete clean.__claim
   delete clean.ownerPid
+  delete clean.ownerStart
   delete clean.gatewayKey
   return clean
 }
 
 function watchStop(env, ac) {
   const timer = setInterval(() => {
-    if (parentGone(env) || pluginShouldExit(env)) ac.abort()
+    if (pluginShouldExit(env)) ac.abort()
   }, 200)
   if (typeof timer.unref === "function") timer.unref()
   return () => clearInterval(timer)
 }
 
+async function holdAfterRecord(env) {
+  const file = env.MAGPIE_TRANSLATOR_HOLD_AFTER_RECORD
+  if (!file) return
+  fs.writeFileSync(file, "ready\n")
+  const deadline = Date.now() + 30000
+  while (Date.now() < deadline) {
+    let text = ""
+    try { text = fs.readFileSync(file, "utf8") } catch { /* 文件刚被换掉 */ }
+    if (text.includes("go")) return
+    await sleep(20)
+  }
+}
+
 export async function runQueued(job, env = process.env, opts = {}) {
   const claim = job?.__claim
   const clean = scrub(job)
+  if (clean.id && (findHistory(clean.id, env) || wasDelivered(clean.id, env))) {
+    finishClaim(claim)
+    return findHistory(clean.id, env)
+  }
   const ac = new AbortController()
   const stopWatch = watchStop(env, ac)
   const started = Date.now()
   let translation = ""
   let error = ""
   try {
-    if (parentGone(env) || pluginShouldExit(env)) throw stopError()
+    if (pluginShouldExit(env)) throw stopError()
     translation = await translateJob({ ...clean, gatewayKey: gatewayKeyFor(env) }, {
       fetchImpl: opts.fetchImpl,
       signal: ac.signal,
     })
   } catch (err) {
-    if (err?.name === "StopWorker" || (ac.signal.aborted && (parentGone(env) || pluginShouldExit(env)))) {
+    if (err?.name === "StopWorker" || (ac.signal.aborted && pluginShouldExit(env))) {
       throw stopError()
     }
     error = String(err?.message || err).slice(0, 500)
@@ -185,12 +246,17 @@ export async function runQueued(job, env = process.env, opts = {}) {
     status: error ? "error" : "done",
   }
   recordTranslation(entry, env, clean.historyLimit)
+  const first = markDelivered(clean.id, env)
   writePublicFeed(env)
+  if (first) {
+    await persistItem(env, entry, clean.display, clean.webhookUrl, {
+      origin: clean.origin,
+      allowRemoteExport: clean.allowRemoteExport,
+    })
+  }
+  if (typeof opts.afterRecord === "function") await opts.afterRecord(entry)
+  await holdAfterRecord(env)
   finishClaim(claim)
-  await persistItem(env, entry, clean.display, clean.webhookUrl, {
-    origin: clean.origin,
-    allowRemoteExport: clean.allowRemoteExport,
-  })
   return entry
 }
 
@@ -250,13 +316,13 @@ export async function processCompare(env = process.env, opts = {}) {
       translateTimeoutMs: view.translateTimeoutMs,
     }
     try {
-      if (parentGone(env) || pluginShouldExit(env)) throw stopError()
+      if (pluginShouldExit(env)) throw stopError()
       translation = await translateJob({ ...job, gatewayKey: gatewayKeyFor(env) }, {
         fetchImpl: opts.fetchImpl,
         signal: ac.signal,
       })
     } catch (err) {
-      if (err?.name === "StopWorker" || (ac.signal.aborted && (parentGone(env) || pluginShouldExit(env)))) {
+      if (err?.name === "StopWorker" || (ac.signal.aborted && pluginShouldExit(env))) {
         throw stopError()
       }
       error = String(err?.message || err).slice(0, 500)
@@ -302,15 +368,20 @@ export async function drain(env = process.env, opts = {}) {
   return n
 }
 
+function publishWait(reason) {
+  return reason === "debounce" || reason === "rate" || reason === "conflict" || reason === "error" || reason === "read"
+}
+
 async function loop() {
   const dir = dataDir()
   const hash = sourceHash()
   if (!await acquireWorkerLock(dir, hash, process.env.MAGPIE_TRANSLATOR_PARENT_PID)) return
+  const token = process.env.MAGPIE_TRANSLATOR_LOCK_TOKEN
   let released = false
   const shutdown = () => {
     if (released) return
     released = true
-    releaseWorkerLock(dir)
+    releaseWorkerLock(dir, token)
     process.exit(0)
   }
   process.on("SIGTERM", shutdown)
@@ -318,7 +389,7 @@ async function loop() {
   let idle = 0
   try {
     for (;;) {
-      if (parentGone() || pluginShouldExit()) break
+      if (pluginShouldExit()) break
       let did = false
       try {
         did = await processOnce()
@@ -326,18 +397,25 @@ async function loop() {
         if (err?.name === "StopWorker") break
         did = false
       }
-      try { syncHostSurface() } catch { /* 下一轮再写摘要 */ }
+      if (queueDepth() === 0) {
+        let published = { wrote: false, reason: "empty" }
+        try { published = syncHostSurface() } catch { published = { wrote: false, reason: "error" } }
+        if (parentGone() && !publishWait(published.reason)) break
+      } else if (parentGone()) {
+        await sleep(50)
+        continue
+      }
       if (did) idle = 0
       else idle += 1
-      if (parentGone() || pluginShouldExit()) break
+      if (pluginShouldExit()) break
       if (!did && pluginTurnedOff()) break
-      if (idle > 40) break
-      await new Promise((resolve) => setTimeout(resolve, 500))
+      if (!parentGone() && idle > 40) break
+      await sleep(parentGone() ? 50 : 500)
     }
   } finally {
     if (!released) {
       released = true
-      releaseWorkerLock(dir)
+      releaseWorkerLock(dir, token)
     }
   }
 }

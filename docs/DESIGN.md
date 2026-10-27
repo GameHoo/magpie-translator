@@ -18,13 +18,13 @@ There is no middleware. Nothing in this package rewrites a stream, including an 
 
 ## Where the second model is called
 
-`src/worker.mjs` is one detached process. `worker.lock` is created with `O_EXCL`. A second process exits when the lock is held by a live pid. The lock stores the pid, a hash of the worker sources, and the parent pid. A hash change, or a dead parent, replaces the process.
+`src/worker.mjs` is one detached process. It publishes a private lock file and links that name onto `worker.lock`. The link fails when the name is already taken. A stale lock is removed by renaming it aside and checking that the renamed file still has the same token. The rename that loses leaves the winner in place. The lock stores the pid, the process start time from `/proc/<pid>/stat`, a random token, a hash of the worker sources, and the parent pid. A signal is sent only when the pid, the start time, and the token all match. A hash change replaces that verified process. A dead parent leaves the current worker in place.
 
-The child environment is `PATH`, `HOME`, the XDG config and data variables, `TMPDIR`, `MAGPIE_BASE_URL` when set, `MAGPIE_TRANSLATOR_HOME`, and `MAGPIE_TRANSLATOR_PARENT_PID`. The gateway key is not passed through the environment.
+The child environment is `PATH`, `HOME`, the XDG config and data variables, `TMPDIR`, `MAGPIE_BASE_URL` when set, `MAGPIE_TRANSLATOR_HOME`, `MAGPIE_TRANSLATOR_PARENT_PID`, and `MAGPIE_TRANSLATOR_LOCK_TOKEN`. The gateway key stays out of the environment.
 
-The worker exits when the parent pid is gone, when this plugin's entry has `off: true`, or when `plugins.json` exists and no longer lists this package. A missing `plugins.json` does not count as uninstalled.
+When the parent pid is gone, the worker finishes the current job, drains the queue, and picks up stranded `processing/` files whose owner start time no longer matches. It writes the options summary only when the queue is empty, then exits. It exits before taking another job when this plugin's entry has `off: true`, or when `plugins.json` exists and no longer lists this package. A missing `plugins.json` does not count as uninstalled.
 
-The call is one `POST <magpie>/v1/chat/completions`. `translateTimeoutMs` is 10 seconds to 10 minutes, default 2 minutes. The plugin does not retry. Loopback requests send no `Authorization` header. Magpie treats a loopback request with no forwarding headers as local and accepts it without a key (`internal/gateway/lan.go`). When a key is required, it lives in `gateway.key` (mode 0600) in the data directory. A value left in `options.gatewayKey` is moved there and deleted from `plugins.json`. `MAGPIE_TRANSLATOR_GATEWAY_KEY` is used only when the file is absent. A 401 or 403 is stored on the history row and shown on the page.
+The call is one `POST <magpie>/v1/chat/completions`. `translateTimeoutMs` is 10 seconds to 10 minutes, default 2 minutes. The plugin does not retry. Loopback requests send no `Authorization` header. Magpie treats a loopback request with no forwarding headers as local and accepts it without a key (`internal/gateway/lan.go`). A remote `magpieBaseUrl` needs `gateway.key`. That file lives in the data directory, mode 0600. A value left in `options.gatewayKey` is moved there and deleted from `plugins.json` only when the fresh file still has that same value. `MAGPIE_TRANSLATOR_GATEWAY_KEY` is used only when the file is absent. A 401 or 403 is stored on the history row and shown on the page.
 
 `User-Agent` is `magpie-translator/` plus the version in `package.json`.
 
@@ -36,7 +36,9 @@ Code masking is off unless `maskCode` is true. The default path sends the text a
 
 `history.json`, `compare-seen.json`, `feed.json`, and the plugins list are written to a temp file and renamed into place. A compare nonce and a queued job are claimed by an exclusive create or a rename into `processing/`.
 
-On startup, a `processing/` job whose owner pid is dead moves back to `inbox/`. A compare claim whose pid is dead is removed, so the same nonce can run again. `compare-seen.json` is updated only after the history write succeeds. A model error that was stored counts as finished. A crash before that write runs the compare again. Compare reads `_compare` from options inside the worker. It does not wait for another gateway reply.
+On startup, a `processing/` job moves back to `inbox/` unless its owner pid is still the same process (the start time matches). A compare claim with no matching start time is removed, so the same nonce can run again. `compare-seen.json` is updated only after the history write succeeds. A model error that was stored counts as finished. A crash before that write runs the compare again. A job id already in `history.json`, or already marked under `delivered/`, is not translated again and is not sent to the webhook again. Compare reads `_compare` from options inside the worker. A stranded job is picked up in that same worker. It does not wait for another gateway reply.
+
+A write to `plugins.json` reads the file again and merges `options.feed` onto that latest copy. `options.gatewayKey` is removed only when it still equals the value copied into `gateway.key`. If the bytes change once more before the rename, that attempt is skipped. A settings save refuses to write when the bytes changed after it was read. The inbox keeps at most 100 jobs and drops the oldest file to make room.
 
 ## What the page shows
 
@@ -45,7 +47,7 @@ The frame has `connect-src 'none'` and no inline scripts. The bridge used here i
 - `magpie.options.get()` and `magpie.options.set()`. A write is at most 64KiB and at most once a second. For a hooks package, a real change restarts the host.
 - `magpie.read("providers:list")` and `magpie.read("usage:summary")`. Those are the only page reads magpie implements.
 
-The history list is `options.feed`. The worker publishes `publicFeed()` there. The slice stays under `FEED_BUDGET` (48,000 bytes). The worker writes it only when the canonical JSON changed, after the summary has been stable for 3 seconds, and at most once every 15 seconds. An identical summary does not touch `plugins.json`, so `checkList` does not restart the host. A real write does restart the host on the next gateway request. That restart is the reason this package is not submitted upstream.
+The history list is `options.feed`. The worker publishes `publicFeed()` there. The slice stays under `FEED_BUDGET` (48,000 bytes). The worker writes it only when the queue is empty and the canonical JSON changed, after the summary has been stable for 3 seconds, and at most once every 15 seconds. An identical summary does not touch `plugins.json`, so `checkList` does not restart the host. A real write does restart the host on the next gateway request. That restart is the reason this package is not submitted upstream.
 
 An empty feed is not written over a missing `feed`, so the first idle start does not restart the host. Clearing history does publish an empty list, so the page can drop rows that were removed.
 
@@ -71,16 +73,17 @@ Data directory: `$MAGPIE_TRANSLATOR_HOME`, else `$XDG_DATA_HOME/magpie-translato
 
 | File | Role |
 | --- | --- |
-| `inbox/*.json` | One queued rewrite, written by rename |
-| `processing/` | Claimed job or compare claim. Recovered when the owner pid is dead |
+| `inbox/*.json` | One queued rewrite, at most 100, written by rename |
+| `processing/` | Claimed job or compare claim. Recovered when the owner start time does not match |
+| `delivered/` | Job ids already stored, so history and webhook run once |
 | `history.json` | Canonical rows, mode 0600. `historyLimit` 0 clears it on the next record |
 | `feed.json` | Public slice. Written only when the JSON changed |
 | `feed-state.json` | Hash and time of the last options publish |
 | `log.jsonl` | Append-only log when `display` includes `log` |
 | `latest.txt` | Last rewrite when `display` includes `file` |
 | `compare-seen.json` | Nonces whose result is already stored |
-| `worker.lock` | Pid, source hash, and parent pid |
-| `gateway.key` | Optional gateway key, mode 0600 |
+| `worker.lock` | Pid, process start time, random token, source hash, and parent pid |
+| `gateway.key` | Optional gateway key, mode 0600. Required for a remote `magpieBaseUrl` |
 
 `display` accepts `log`, `file`, `stdout`, `notify`, `webhook`. The package directory is never written. There is no local port.
 

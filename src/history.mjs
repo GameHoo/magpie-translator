@@ -3,7 +3,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { DEFAULT_HISTORY_LIMIT } from "./constants.mjs"
 import { parseHistoryLimit } from "./config.mjs"
-import { dataDir, logPath, writeAtomic } from "./paths.mjs"
+import { dataDir, ensureDir, logPath, writeAtomic } from "./paths.mjs"
 
 const PUBLIC = ["id", "at", "agent", "model", "translator", "language", "style", "ms", "original", "translation", "error", "status"]
 
@@ -240,6 +240,35 @@ export function markSeen(nonce, env = process.env) {
   if (!nonce || seen.includes(nonce)) return
   seen.push(nonce)
   writeAtomic(seenPath(env), `${JSON.stringify(seen.slice(-200))}\n`)
+}
+
+function deliveryDir(env) {
+  return path.join(dataDir(env), "delivered")
+}
+
+function deliveryName(id) {
+  return createHash("sha256").update(String(id)).digest("hex")
+}
+
+export function wasDelivered(id, env = process.env) {
+  if (!id) return false
+  return fs.existsSync(path.join(deliveryDir(env), deliveryName(id)))
+}
+
+// 同一个任务 id 只记下一次。历史和 webhook 都先看这个标记。
+export function markDelivered(id, env = process.env) {
+  if (!id) return false
+  ensureDir(deliveryDir(env))
+  const file = path.join(deliveryDir(env), deliveryName(id))
+  try {
+    const fd = fs.openSync(file, "wx", 0o600)
+    fs.writeFileSync(fd, `${id}\n`)
+    fs.closeSync(fd)
+    return true
+  } catch (err) {
+    if (err?.code === "EEXIST") return false
+    throw err
+  }
 }
 
 function readSeen(env) {

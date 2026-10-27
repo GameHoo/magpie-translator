@@ -353,6 +353,7 @@ function emptyView() {
 
 export function saveSettings(input, env = process.env, locate = {}) {
   const { file, list, missing } = readPluginList(env)
+  const raw = missing ? "" : fs.readFileSync(file, "utf8")
   if (missing) {
     const error = new Error("还没有 plugins.json。先运行 magpie plugin add。")
     error.status = 404
@@ -372,6 +373,12 @@ export function saveSettings(input, env = process.env, locate = {}) {
   }
   const changed = !sameJson(entry.options || {}, normalized.options)
   if (changed) {
+    const again = fs.readFileSync(file, "utf8")
+    if (again !== raw) {
+      const error = new Error("plugins.json 在写入前被改过，这次没有覆盖")
+      error.status = 409
+      throw error
+    }
     entry.options = normalized.options
     writeList(file, list)
   }
@@ -414,27 +421,56 @@ function feedHash(feed) {
   return createHash("sha256").update(JSON.stringify(canonical(feed))).digest("hex")
 }
 
+// 写入前再读一遍。文件被别人改过，就只把 feed / gatewayKey 合到新内容上；合的时候又变了就跳过。
+function commitPluginKeys(file, env, locate, change, beforeWrite) {
+  let first
+  try { first = fs.readFileSync(file, "utf8") } catch { return { wrote: false, reason: "conflict" } }
+  if (typeof beforeWrite === "function") beforeWrite(file)
+  let base
+  try { base = fs.readFileSync(file, "utf8") } catch { return { wrote: false, reason: "conflict" } }
+  let list
+  try { list = JSON.parse(base) } catch { return { wrote: false, reason: "conflict" } }
+  if (!list || typeof list !== "object" || Array.isArray(list)) return { wrote: false, reason: "conflict" }
+  if (!Array.isArray(list.plugins)) list.plugins = []
+  const entry = findPlugin(list, env, locate)
+  if (!entry) return { wrote: false, reason: "absent" }
+  const options = entry.options && typeof entry.options === "object" && !Array.isArray(entry.options) ? entry.options : {}
+  entry.options = options
+  let dirty = false
+  if (change.dropKey && options.gatewayKey === change.dropKey) {
+    delete options.gatewayKey
+    dirty = true
+  }
+  if (change.feed !== undefined && !sameJson(options.feed ?? null, change.feed)) {
+    options.feed = change.feed
+    dirty = true
+  }
+  if (!dirty) return { wrote: false, reason: base === first ? "unchanged" : "merged" }
+  let third
+  try { third = fs.readFileSync(file, "utf8") } catch { return { wrote: false, reason: "conflict" } }
+  if (third !== base) return { wrote: false, reason: "conflict" }
+  writeList(file, list)
+  if (base !== first) return { wrote: true, reason: "merged" }
+  return { wrote: true, reason: change.feed !== undefined ? "feed" : "key" }
+}
+
 // 把公开摘要写进 plugins.json 的 options.feed。内容相同就不碰文件，避免宿主重启。
 // 真有变化时先等摘要稳定，并且两次写入至少隔一段时间。密钥顺手搬出 plugins.json。
 export function syncHostSurface(env = process.env, opts = {}) {
   const debounce = Number.isFinite(opts.debounceMs) ? opts.debounceMs : FEED_DEBOUNCE_MS
   const interval = Number.isFinite(opts.minIntervalMs) ? opts.minIntervalMs : FEED_MIN_INTERVAL_MS
   const now = Number.isFinite(opts.now) ? opts.now : Date.now()
+  const locate = opts.locate || {}
   let loaded
   try { loaded = readPluginList(env) } catch { return { wrote: false, reason: "read" } }
   if (loaded.missing) return { wrote: false, reason: "missing" }
-  const entry = findPlugin(loaded.list, env, opts.locate || {})
+  const entry = findPlugin(loaded.list, env, locate)
   if (!entry) return { wrote: false, reason: "absent" }
   const options = entry.options && typeof entry.options === "object" && !Array.isArray(entry.options) ? entry.options : {}
-  entry.options = options
 
-  let keyMoved = false
   const rawKey = typeof options.gatewayKey === "string" ? options.gatewayKey.trim() : ""
-  if (rawKey) {
-    writeGatewayKey(rawKey, env)
-    delete options.gatewayKey
-    keyMoved = true
-  }
+  if (rawKey) writeGatewayKey(rawKey, env)
+  const dropKey = rawKey || ""
 
   const feed = publicFeed(readHistory(env))
   const dir = dataDir(env)
@@ -443,10 +479,7 @@ export function syncHostSurface(env = process.env, opts = {}) {
   const skipFeed = entry.off === true || same || (empty && options.feed == null)
   if (skipFeed) {
     if (same || empty) feedPending.delete(dir)
-    if (keyMoved) {
-      writeList(loaded.file, loaded.list)
-      return { wrote: true, reason: "key" }
-    }
+    if (dropKey) return commitPluginKeys(loaded.file, env, locate, { dropKey }, opts.beforeWrite)
     if (entry.off === true) return { wrote: false, reason: "off" }
     if (same) return { wrote: false, reason: "unchanged" }
     return { wrote: false, reason: "empty" }
@@ -459,26 +492,22 @@ export function syncHostSurface(env = process.env, opts = {}) {
     feedPending.set(dir, pending)
   }
   if (now - pending.since < debounce) {
-    if (keyMoved) {
-      writeList(loaded.file, loaded.list)
-      return { wrote: true, reason: "key" }
-    }
+    if (dropKey) return commitPluginKeys(loaded.file, env, locate, { dropKey }, opts.beforeWrite)
     return { wrote: false, reason: "debounce" }
   }
   const state = readFeedState(env)
   if (state.at && now - state.at < interval) {
-    if (keyMoved) {
-      writeList(loaded.file, loaded.list)
-      return { wrote: true, reason: "key" }
-    }
+    if (dropKey) return commitPluginKeys(loaded.file, env, locate, { dropKey }, opts.beforeWrite)
     return { wrote: false, reason: "rate" }
   }
 
-  options.feed = feed
-  writeList(loaded.file, loaded.list)
-  writeAtomic(feedStatePath(env), `${JSON.stringify({ hash, at: now })}\n`)
-  feedPending.delete(dir)
-  return { wrote: true, reason: "feed", bytes: JSON.stringify(feed).length }
+  const result = commitPluginKeys(loaded.file, env, locate, { dropKey, feed }, opts.beforeWrite)
+  if (result.wrote && (result.reason === "feed" || result.reason === "merged")) {
+    writeAtomic(feedStatePath(env), `${JSON.stringify({ hash, at: now })}\n`)
+    feedPending.delete(dir)
+    return { ...result, reason: result.reason === "merged" ? "merged" : "feed", bytes: JSON.stringify(feed).length }
+  }
+  return result
 }
 
 export const DEFAULTS = { language: DEFAULT_LANGUAGE, display: [...DEFAULT_DISPLAY] }
