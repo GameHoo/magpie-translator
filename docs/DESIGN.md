@@ -2,7 +2,7 @@
 
 插件包名是 magpie-translator。它是 magpie 的异步 gateway hook，不改写 agent 已经拿到的回复。工作模型和翻译模型都是配置里的模型 id，magpie 里已经配好的 provider（含 grok、DeepSeek、Gemini 这类插件 provider）把 id 贴进来就能用，加一个新模型不用改插件代码。`language` 写成任意人类读得懂的语言名，默认是 `简体中文`。默认提示词是英文指令，把这个名字嵌进去，不另写一套中文指令。提示词和展示出口也能改。
 
-要看的两处都在 magpie 窗口里：设置槽里的设置，侧栏里的转述记录。本机 `127.0.0.1` 页面默认不开。日志、文本文件、桌面通知和 webhook 仍是 `display` 里的出口。设置写回的仍是 `plugins.json` 里这一条 options，和 `magpie plugin options` 同一份。
+要看的两处都在 magpie 窗口里：设置槽里的设置，侧栏里的翻译记录。本机 `127.0.0.1` 页面默认不开。日志、文本文件、桌面通知和 webhook 仍是 `display` 里的出口。设置写回的仍是 `plugins.json` 里这一条 options，和 `magpie plugin options` 同一份。
 
 核验日期：2026-10-27。状态：已定稿。对照的是本机 magpie 0.1.1731、当天的 [gateway hooks 文档](https://github.com/yetone/magpie/blob/main/docs/subsystems/gateway-request-hooks.md)、`internal/gateway/gateway_hooks.go`、`internal/provider/chatgpt_api.go`，以及当天能读到的 Codex 与 Claude Code 公开资料。
 
@@ -42,7 +42,11 @@
 | `rules` | 空数组 | 空则什么都不转述 |
 | `translateTimeoutMs` | `120000` | 一次翻译调用的上限，夹在 10–600 秒。超时、连接中断，或 HTTP 408、429、5xx 再试一次。其他 4xx 不重试 |
 | `rewriteSameLanguage` | false | 关着时，原文已经是目标语言就不送。认不出的语言名仍送。规则上的同名字段优先 |
-| `historyLimit` | `500` | `history.json` 保留的条数，夹在 20–2000 |
+| `historyLimit` | `500` | `history.json` 保留的条数。`0` 表示不保存，下一次翻译清空文件。其他数字夹在 20–5000 |
+| `enabled` | true | 页头开关。`false` 时不再为新回复入队。改不了 magpie 自己的插件停用开关 |
+| `placement` | `beside` | 只影响翻译记录页的排法：`beside` 并排，`below` 原文在译文上方，`only` 只留译文。不写回 Agent 会话 |
+| `showTranslatorBadge` | true | 记录栏是否标出翻译模型和耗时 |
+| `collapseOriginal` | false | `placement` 为 `below` 时，原文默认折叠 |
 | `localPanel` | false | 为 true 时，即使 `display` 没有 `panel` 也监听本机页面 |
 
 另外四个全局项不进规则、也不出现在表单上：`panelPort`（默认 44721）、`magpieBaseUrl`（默认读 `~/.config/magpie/settings.json` 的端口，否则 `http://127.0.0.1:3425`）、`gatewayKey`（工人回叫本机 magpie 用的钥匙，默认 `magpie-translator`，不是厂商密钥）、`gatewayTimeoutMs`（只限制 hook 写收件箱的时间，允许 100–10000 毫秒；`package.json` 的 `magpie.options` 里写的是 2000）。翻译发生在 hook 返回之后。
@@ -98,7 +102,11 @@ hook 拿到的 `ctx.options` 是 Bun host 启动时抄下来的。`internal/plug
 
 ## magpie 窗口里的记录
 
-侧栏页是 `package.json` 里的 `magpie.page`，文件 `ui/history.html`，中文标题「转述记录」。设置槽是 `magpie.panels`，`slot` 为 `settings`，文件 `ui/settings.html`。两页必须放在同一个目录，因为 magpie 只从该 HTML 所在目录提供文件。权限是 `providers:list` 和 `usage:summary`。`magpie.icon` 是一张 SVG 的 data URI（这个字段不接受相对路径）。侧栏图标是 `ui/icon.svg`。
+侧栏页是 `package.json` 里的 `magpie.page`，文件 `ui/history.html`，中文标题「翻译记录」。设置槽是 `magpie.panels`，`slot` 为 `settings`，文件 `ui/settings.html`，中文标题「翻译设置」。两页必须放在同一个目录，因为 magpie 只从该 HTML 所在目录提供文件。权限是 `providers:list` 和 `usage:summary`。
+
+图标文件是 `ui/icon.svg`：靛蓝圆角方块（底色 `#5b5bd6`，上面一条 `#7b7bf0` → `#4646b8` 的渐变）加白色翻译标记。笔画是 `#ffffff`，不用 `currentColor`，所以浅色和深色底上都是同一张图。`magpie.icon` 是这张 SVG 的 `data:image/svg+xml` URI（1255 字符），给 Discover 卡片和已安装插件那一行用。这个字段不接受相对路径。`magpie.page.icon` 写的是 `ui/icon.svg`；`page.go` 会把它收成页面目录里的 `icon.svg`，侧栏入口用这一张。2026-10-27 对照 `internal/plugin/page.go`：`PanelSpec` 没有 icon，设置槽不能单独配图标。页头里的同一枚标记是 CSS 画的，不另占一个文件。
+
+同一天在浏览器里把 `ui/icon.svg` 放在 `#fafafa` 和 `#0b0b0c` 上，64、20、16 像素都看得出白色标记。`package.json` 里的 data URI 用 `decodeURIComponent` 解出来与这个文件逐字相同，再作为图片加载也能画出。对照了 `market.go` 的 `ownIcon`（接受 `data:image/`，长度不超过约 1.5MB）、`favicon.go` 的 `dataURI`（非 base64 时按百分号解码）和 `icon.go` 的 `StoreIcon`（前 1024 字节里有 `<svg` 就当 SVG）。这条 URI 符合这三处。没有在 magpie 的插件列表、Discover 或侧栏里点开，因为这台机器没有 magpie 窗口。页面资源表把 `.svg` 标成 `image/svg+xml`（`internal/gui/api.go` 的 `assetTypes`），侧栏不会把这张图当成别的类型。
 
 页面读不到网络，所以工人把数据写成同目录的脚本：
 
@@ -109,7 +117,20 @@ hook 拿到的 `ctx.options` 是 Bun host 启动时抄下来的。`internal/plug
 
 `magpie plugin list` 把这个 hook 印成 `async gateway hook onRequest`，窗口空闲文案是 Waiting for a request。这两句不检查插件是否导出了 `onResponse`。本插件两个都导出。不调用 `ctx.report("ready")`，那会把状态说成「准备好往上下文里插内容」。
 
-版面是临时的。设置页和记录页能用：下拉、开关、规则的增删和排序、左右对照和同步滚动、筛选、搜索、换模型再译、导出到文本框。视觉稿到达之后再按稿换，不在这版上打磨。2026-10-27 没有在 magpie 窗口里打开过这两页。
+版面按 2026-10-27 批准的设计稿实现：`ui/style.css` 和 `ui/app.js`。设置页是选择器、风格卡片、规则流和提示词编辑区，没有手填模型的框。记录页是左右对照、失败卡片、窄屏标签，以及「用其他模型对比」。`options.set` 至少隔 1.1 秒一次。
+
+设计稿里有几处页面做不到，或做成了别的样子：
+
+- 译文位置写的是 magpie 会话视图。会话里的字节不能改，否则下一轮会带上译文。这个控件只改翻译记录页的排法。
+- `providers:list` 没有模型 id。具体模型来自 `catalog.js` 和 `usage:summary`，厂商名来自 `providers:list`。接口不提供模型的副标题。
+- 导出不能下载文件。复制到剪贴板。
+- 记录里没有 token 数和请求 id。超时卡片用真实错误文字，不编一个 request id。
+- 提示词框里的中文模板在没改过时保存为空，翻译请求仍用内置英文任务句。
+- 「这个更好」只提示已记下，不改规则。
+- 页头开关写入 `enabled`，不是 magpie 的插件停用。
+- 同语言跳过的回复不进历史，和开关下的说明一致。页面仍能画出「已跳过」卡片，但钩子不会写出这种记录。
+
+2026-10-27 用浏览器打开过 `ui/settings.html`（浅色、深色、模型选择器、未保存状态）和 `ui/history.html?demo=1`（左右对照、超时卡片、宽 720 的原文/译文标签、「用其他模型对比」弹出的模型列表）。预览地址是 `http://127.0.0.1:44731/`。控制台里只有 magpie 桥脚本和 favicon 的 404，静态服务器本来就没有这两样。没有在 magpie 窗口里打开过。
 
 ## 改写 agent 拿到的字节，译文会进下一轮
 
@@ -170,7 +191,7 @@ Codex 走 magpie 的 agent 路由时，`src/middleware.mjs` 的 `onEvent` 会在
 
 2026-10-27 在这台机器上核对过的部分：
 
-- `npm test` 48 项通过。其中「下一轮发给原模型的请求不含译文」用 Responses、Anthropic、Chat、Gemini 四种客户端会落盘的材料组出下一轮请求，断言里面没有译文、记号和网关钥匙，原文、代码和推理还在。对照项证明：若流里的正文已被改成译文，下一轮请求就会带上它。工具轮不会产生翻译任务。另有一条把 `language` 设成 `Français`，断言默认提示词里出现这个名字，并且提示正文没有中文字。自定义提示词里的 `{language}` 会换成 `Français`，不认识的 `{tone}` 原样留下。同一天补上的测试覆盖：`*` 出现在中间且不区分大小写、Codex 式的 reasoning 加没有 phase 的 message、工具后面的正文留下而铺垫丢掉、中间件补上空的 `response.completed`、纯 JSON 和建议请求不入队、同语言默认跳过、超时重试一次而 HTTP 400 不重试、历史上限和 feed 脚本不含钥匙、`localPanel` 在只要日志时仍监听、清单里的 page 与 panels。
+- `npm test` 51 项通过。其中「下一轮发给原模型的请求不含译文」用 Responses、Anthropic、Chat、Gemini 四种客户端会落盘的材料组出下一轮请求，断言里面没有译文、记号和网关钥匙，原文、代码和推理还在。对照项证明：若流里的正文已被改成译文，下一轮请求就会带上它。工具轮不会产生翻译任务。另有一条把 `language` 设成 `Français`，断言默认提示词里出现这个名字，并且提示正文没有中文字。自定义提示词里的 `{language}` 会换成 `Français`，不认识的 `{tone}` 原样留下。同一天补上的测试覆盖：`*` 出现在中间且不区分大小写、Codex 式的 reasoning 加没有 phase 的 message、工具后面的正文留下而铺垫丢掉、中间件补上空的 `response.completed`、纯 JSON 和建议请求不入队、同语言默认跳过、超时重试一次而 HTTP 400 不重试、历史上限和 feed 脚本不含钥匙、`localPanel` 在只要日志时仍监听、清单里的 page 与 panels。
 - 设置页测试：保存只改这一条插件的 options，`gatewayKey` 等未编辑字段还在，别的插件、`off`、`config`、`prefer` 不动；请求体里夹带的 `gatewayKey` 不会覆盖原值，响应里也没有这把钥匙。没有令牌、错误的 `Origin` / `Referer` / `Host` / `Sec-Fetch-Site` 都是 403，文件不变。监听地址是 `127.0.0.1`。空的配置目录不会被自动写成 `plugins.json`。同一天在浏览器里打开 `http://127.0.0.1:44771/settings`，改语言后点保存，`plugins.json` 里的 `language` 变成新值，页面写着「已写入，下一轮请求生效。」窄窗口（宽 390）没有横向溢出。
 - 另一项测试把翻译模型写成 `community/brand-new-model`、`plugin-grok/grok-4` 这类任意字符串，断言发出去的 `model` 就是这个字符串，并且运行时代码里没有厂商模型表。
 - 语言、自定义提示词、规则覆盖、以及「只开 log / file / webhook、不监听网页」有单独测试。webhook 的 JSON 里没有网关钥匙。
@@ -179,7 +200,7 @@ Codex 走 magpie 的 agent 路由时，`src/middleware.mjs` 的 `onEvent` 会在
 
 还没有在这台机器上核对的部分：
 
-- 没有跑真实的 Codex CLI 或 Claude Code 进程，也没有用 DeepSeek、Gemini、grok 的真实密钥。没有在 magpie 窗口里打开设置槽或「转述记录」。这两页的版面是临时的。
+- 没有跑真实的 Codex CLI 或 Claude Code 进程，也没有用 DeepSeek、Gemini、grok 的真实密钥。没有在 magpie 窗口里打开设置槽、「翻译记录」、插件列表、Discover 或侧栏图标。静态页面在浏览器里对过版面，图标文件和 data URI 也在浅色和深色底上打开过，见上面「magpie 窗口里的记录」。
 - 没有走 Codex 的 ChatGPT 透传路径 `/backend-api/codex`。文档写明这条路径会跑异步 hook、不跑中间件。若那条路径的 `response.completed` 不带 output，主回复仍会漏掉。本仓库的端到端走的是普通网关入口。
 - 没有确认桌面通知（`notify-send`）在一台有图形会话的机器上真的弹出。
 - magpie 若增加第五种响应 JSON 形状，当前抽取函数不会认识它。
