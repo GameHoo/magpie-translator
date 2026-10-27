@@ -1,0 +1,1 @@
+process.env.MAGPIE_TRANSLATOR_NO_SPAWN = "1"

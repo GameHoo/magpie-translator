@@ -53,6 +53,8 @@ export function presentation(options = {}, rule = {}) {
     translateTimeoutMs: parseTimeout(options.translateTimeoutMs),
     rewriteSameLanguage: rewrite,
     historyLimit: parseHistoryLimit(options.historyLimit),
+    maskCode: parseFlag(options.maskCode, false),
+    allowRemoteExport: parseFlag(options.allowRemoteExport, false),
   }
 }
 

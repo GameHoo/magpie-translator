@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "bun:test"
 import { extractUserText } from "../src/extract.mjs"
-import { maskCode, restore } from "../src/mask.mjs"
+import { keepCode, maskCode, restore } from "../src/mask.mjs"
 
 const prose = "The cache invalidates when the file mtime changes.\n\n```bash\nstat -c %Y file\n```\n\nRun that when the entry looks stale."
 
@@ -123,24 +123,53 @@ test("Gemini 跳过 thought，有 functionCall 时不转述", () => {
   assert.equal(tool.skip, "tool_round")
 })
 
-test("代码块、行内代码和 $ 命令行原样嵌回，模型漏掉占位符时补在末尾", () => {
-  const masked = maskCode("See `stat` then\n\n```bash\nstat -c %Y file\n```\n\n$ npm test\n\nDone.")
+test("默认不遮住代码；打开之后占位符只在独占一行时嵌回", () => {
+  const source = "See `stat` then\n\n```bash\nstat -c %Y file\n```\n\n$ npm test\n\nDone."
+  const plain = maskCode(source)
+  assert.equal(plain.masked, source)
+  assert.deepEqual(plain.slots, [])
+  assert.match(plain.prose, /stat -c %Y file/)
+
+  const masked = maskCode(source, true)
   assert.equal(masked.masked.includes("stat -c %Y file"), false)
   assert.equal(masked.masked.includes("`stat`"), false)
   assert.equal(masked.masked.includes("$ npm test"), false)
   assert.match(masked.masked, /⟦0⟧/)
   assert.match(masked.prose, /See/)
-  const back = restore(`先看 ${masked.slots.map((_, i) => `⟦${i}⟧`).join("，")}，就好。`, masked.slots)
-  assert.match(back, /`stat`/)
-  assert.match(back, /stat -c %Y file/)
-  assert.match(back, /\$ npm test/)
+  const ownLine = restore(masked.slots.map((_, i) => `⟦${i}⟧`).join("\n"), masked.slots)
+  assert.match(ownLine, /`stat`/)
+  assert.match(ownLine, /stat -c %Y file/)
+  assert.match(ownLine, /\$ npm test/)
+  const mid = restore(`先看 ${masked.slots.map((_, i) => `⟦${i}⟧`).join("，")}，就好。`, masked.slots)
+  assert.match(mid, /先看/)
+  assert.equal(/^先看.*stat -c %Y file/s.test(mid.split("\n")[0]), false)
+  assert.match(mid, /\n\n```bash\nstat -c %Y file\n```/)
   const dropped = restore("只剩白话。", masked.slots)
   assert.match(dropped, /只剩白话/)
   assert.match(dropped, /stat -c %Y file/)
   assert.match(dropped, /\$ npm test/)
 })
 
-test("只有代码时 prose 为空，调用方不应送去转述", () => {
-  const masked = maskCode("```js\nconst x = 1\n```")
-  assert.equal(masked.prose, "")
+test("mermaid 围栏在遮住代码时也不抽走", () => {
+  const source = "before\n\n```mermaid\ngraph TD\n  A[`x`] --> B\n```\n\nafter `y`"
+  const masked = maskCode(source, true)
+  assert.match(masked.masked, /```mermaid\ngraph TD\n  A\[`x`\] --> B\n```/)
+  assert.equal(masked.slots.some((slot) => slot.includes("mermaid")), false)
+  assert.equal(masked.slots.some((slot) => slot.includes("`y`")), true)
+})
+
+test("不遮住时按顺序把围栏换回原文，缺的补在末尾", () => {
+  const original = "甲\n\n```bash\nstat -c %Y file\n```\n\n乙"
+  const replaced = keepCode(original, "一\n\n```bash\nchanged\n```\n\n二")
+  assert.match(replaced, /```bash\nstat -c %Y file\n```/)
+  assert.equal(replaced.includes("changed"), false)
+  const appended = keepCode(original, "只有白话")
+  assert.match(appended, /只有白话/)
+  assert.match(appended, /\n\n```bash\nstat -c %Y file\n```/)
+})
+
+test("只有代码时，遮住才让 prose 为空", () => {
+  const source = "```js\nconst x = 1\n```"
+  assert.match(maskCode(source).prose, /const x = 1/)
+  assert.equal(maskCode(source, true).prose, "")
 })

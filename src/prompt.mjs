@@ -24,7 +24,7 @@ export function fillPlaceholders(template, vars = {}) {
 
 // prompt 只替换任务句。记号和占位符规则始终保留：前者避免翻译请求回环，后者保住代码。
 // 任务句和固定规则都用英文写成。自定义任务句里的 {language} 等占位符在这里展开。
-export function systemPrompt({ language, prompt, style, model, translator } = {}) {
+export function systemPrompt({ language, prompt, style, model, translator, slots } = {}) {
   const lang = typeof language === "string" && language.trim() ? language.trim() : DEFAULT_LANGUAGE
   const styleRaw = typeof style === "string" ? style.trim() : ""
   const modelId = typeof model === "string" ? model.trim() : ""
@@ -38,12 +38,13 @@ export function systemPrompt({ language, prompt, style, model, translator } = {}
   const vars = { language: lang, style: styleFilled, model: modelId, translator: translatorId }
   const custom = typeof prompt === "string" && prompt.trim() ? prompt.trim() : ""
   const task = custom ? fillPlaceholders(custom, vars) : defaultTask(lang)
-  const lines = [
-    MARKER,
-    task,
-    "Placeholders such as ⟦0⟧ and ⟦1⟧ stand for code or commands. Keep each one exactly where it is, including the brackets and the number. Do not translate, delete, or move them.",
-    "Output only the rewritten text.",
-  ]
+  const lines = [MARKER, task]
+  if (Array.isArray(slots) && slots.length) {
+    lines.push("Placeholders such as ⟦0⟧ and ⟦1⟧ stand for code or commands. Keep each one exactly where it is, including the brackets and the number. Do not translate, delete, or move them.")
+  } else {
+    lines.push("Keep fenced code blocks, inline code, and lines that start with $ exactly as they are.")
+  }
+  lines.push("Output only the rewritten text.")
   if (styleFilled) lines.push(styleFilled)
   return lines.join("\n")
 }

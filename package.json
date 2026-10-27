@@ -7,8 +7,8 @@
     "page",
     "src",
     "README.md",
-    "LICENSE",
-    "docs/registry-entry.json"
+    "README.zh-CN.md",
+    "LICENSE"
   ],
   "keywords": [
     "magpie",
@@ -25,7 +25,6 @@
   },
   "magpie": {
     "hooks": "./src/hooks.mjs",
-    "middleware": "./src/middleware.mjs",
     "page": {
       "title": "Translations",
       "titles": {
@@ -49,7 +48,6 @@
       "usage:summary"
     ],
     "options": {
-      "gatewayTimeoutMs": 10000,
       "enabled": true,
       "language": "简体中文",
       "prompt": "",
@@ -59,7 +57,7 @@
       "showTranslatorBadge": true,
       "collapseOriginal": false,
       "rewriteSameLanguage": false,
-      "translateTimeoutMs": 10000,
+      "translateTimeoutMs": 120000,
       "historyLimit": 500,
       "rules": []
     }

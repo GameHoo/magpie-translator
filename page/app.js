@@ -5,7 +5,7 @@
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
   const params = new URLSearchParams(location.search);
-  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const h = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
   const icon = (id, cls = "sm") => `<svg class="i ${cls}"><use href="#i-${id}"/></svg>`;
 
@@ -55,10 +55,10 @@
       "h.src": "原文", "h.dst": "译文", "h.compare": "用其他模型对比…", "h.copyDst": "复制译文", "h.copySrc": "复制原文",
       "h.retranslate": "重新翻译", "h.kept": "原样保留", "h.changed": "译文改了代码", "h.empty": "没有匹配的记录",
       "h.emptySub": "换个关键词，或清除筛选条件。", "h.clear": "清除筛选", "h.pick": "选择一条记录",
-      "h.pickSub": "左侧选一条，原文和译文会并排显示。", "h.none": "还没有翻译记录", "h.noneSub": "命中规则的最终回复会出现在这里。",
+      "h.pickSub": "左侧选一条，原文和译文会并排显示。", "h.none": "还没有翻译记录", "h.noneSub": "新记录写在本机数据目录。这一页读不到那个目录，所以这里先是空的。",
       "h.today": "今天", "h.yesterday": "昨天", "toast.copied": "已复制到剪贴板", "h.noOut": "没有译文", "h.retry": "重试",
       "h.retryWith": "换个模型重试…", "h.adjust": "调整超时", "h.better": "这个更好", "h.collapse": "收起列表",
-      "h.alignNote": "按段落对齐 · 同步滚动", "h.queued": "已提交，下一次回复时开始", "h.retried": "已提交重新翻译，下一次回复时开始",
+      "h.alignNote": "按段落对齐 · 同步滚动", "h.queued": "已写入本机数据目录，不需要再等下一条回复", "h.retried": "已写入本机数据目录，不需要再等下一条回复",
       "h.noMagpie": "这一页要在 magpie 里打开，才能交给翻译模型", "h.rate": "成功率 {n}%", "h.lat": "中位延迟 {n} s", "h.latNone": "中位延迟 —",
       "h.count": "共 {n} 条", "h.countF": "{n} / {all} 条", "h.timeoutTitle": "翻译超时", "h.failTitle": "翻译失败",
       "h.skipTitle": "已跳过", "h.expand": "展开原文", "st.ok": "成功", "st.failed": "失败", "st.timeout": "超时", "st.skipped": "已跳过",
@@ -79,10 +79,10 @@
       "h.src": "Original", "h.dst": "Translation", "h.compare": "Compare with…", "h.copyDst": "Copy translation", "h.copySrc": "Copy original",
       "h.retranslate": "Retranslate", "h.kept": "kept as is", "h.changed": "code was changed", "h.empty": "No matching entries",
       "h.emptySub": "Try another keyword or clear filters.", "h.clear": "Clear filters", "h.pick": "Pick an entry",
-      "h.pickSub": "Original and translation show side by side.", "h.none": "No translations yet", "h.noneSub": "Final replies that match a rule show up here.",
+      "h.pickSub": "Original and translation show side by side.", "h.none": "No translations yet", "h.noneSub": "New rows are in the local data directory. This page cannot read that directory, so the list stays empty.",
       "h.today": "Today", "h.yesterday": "Yesterday", "toast.copied": "Copied", "h.noOut": "No translation", "h.retry": "Retry",
       "h.retryWith": "Retry with…", "h.adjust": "Adjust timeout", "h.better": "Better", "h.collapse": "Hide list",
-      "h.alignNote": "Paragraph-aligned · synced scroll", "h.queued": "Queued. It runs on the next reply", "h.retried": "Retranslate queued for the next reply",
+      "h.alignNote": "Paragraph-aligned · synced scroll", "h.queued": "Queued in the local data directory. It does not wait for the next reply", "h.retried": "Retranslate queued in the local data directory. It does not wait for the next reply",
       "h.noMagpie": "Open this page inside magpie to send it to a model", "h.rate": "{n}% succeeded", "h.lat": "median {n} s", "h.latNone": "median —",
       "h.count": "{n} total", "h.countF": "{n} / {all}", "h.timeoutTitle": "Timed out", "h.failTitle": "Translation failed",
       "h.skipTitle": "Skipped", "h.expand": "Show original", "st.ok": "OK", "st.failed": "Failed", "st.timeout": "Timed out", "st.skipped": "Skipped",
@@ -97,9 +97,9 @@
     "disp.where.sub": "On the Translations page. Never written back to the session.", "disp.badge": "Show translator badge",
     "disp.badge.sub": "Which model translated, and how long it took", "disp.collapse": "Collapse original by default",
     "disp.collapse.sub": "Only for “Below original”", "disp.skip": "Skip if already in target language",
-    "disp.skip.sub": "Detected locally; no call, no history entry", "disp.code": "Keep code and commands as is", "common.always": "Always on",
-    "disp.code.sub": "Fenced blocks, inline code, paths and commands are never rewritten", "disp.timeout": "Timeout",
-    "disp.timeout.sub": "Give up and record as “Timed out”. Magpie stops the hook at gatewayTimeoutMs (10s at most)", "disp.hist": "Keep history", "disp.hist.sub": "Stored locally; oldest dropped first",
+    "disp.skip.sub": "Detected locally; no call, no history entry", "disp.code": "Keep code and commands as is", "common.always": "Always checked",
+    "disp.code.sub": "Masking is off by default, so the model sees the code. Fenced blocks are put back afterwards. Set maskCode to mask them.", "disp.timeout": "Timeout",
+    "disp.timeout.sub": "The worker waits this long (10–120s), then records a timeout. The hook only enqueues and returns.", "disp.hist": "Keep history", "disp.hist.sub": "Stored locally; oldest dropped first",
     "rules.title": "Rules", "rules.sub": "Matched top to bottom; first match wins. Drag or use arrows to reorder.",
     "rules.fall": "Nothing is translated when no rule matches. Put “All models” last as a fallback.", "rules.add": "Add rule",
     "prompt.title": "Prompt", "prompt.sub": "Shared by all rules; a rule can override it under Advanced.", "prompt.reset": "Reset",
@@ -173,6 +173,14 @@
   document.addEventListener("mousedown", (e) => { if (openPop && !openPop.el.contains(e.target) && !openPop.anchor.contains(e.target)) closePop(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePop(); });
   addEventListener("resize", closePop);
+
+  function showJobError(message) {
+    const el = $("#jobError");
+    if (!el) return;
+    const text = message ? String(message) : "";
+    el.hidden = !text;
+    el.textContent = text;
+  }
 
   let setChain = Promise.resolve();
   let lastSet = 0;
@@ -611,11 +619,7 @@
       saved = opts || {};
       styleTouched = false;
       timeoutTouched = false;
-      const language = saved.language || "简体中文";
-      if (![...$("#lang").options].some((o) => o.value === language)) {
-        const opt = document.createElement("option");
-        opt.value = language; opt.textContent = language; $("#lang").append(opt);
-      }
+      const language = LANGS.includes(saved.language) ? saved.language : "简体中文";
       $("#lang").value = language;
       const known = PRESETS.find((p) => p.style === saved.style || p.label === saved.style);
       $$("#styleGrid button").forEach((b) => b.setAttribute("aria-pressed", String(known ? b.dataset.style === known.id : (!saved.style && b.dataset.style === "plain"))));
@@ -650,14 +654,13 @@
       if (window.magpie?.options?.get) {
         try { base = await window.magpie.options.get() || {}; } catch { /* 用上次读到的 */ }
       }
-      const next = { ...(base || {}) };
-      Object.assign(next, body);
-      delete next._compare;
-      delete next.localPanel;
-      delete next.panelPort;
+      const built = window.translatorPageOptions ? window.translatorPageOptions(base, body) : { error: "页面缺少 payload.js" };
+      if (built.error) { showJobError(built.error); toast(built.error); setDirty(); return; }
+      const next = built.options;
       saveBtn.disabled = true;
       const result = await setOptions(next);
       if (result === true) {
+        showJobError("");
         saved = next;
         styleTouched = false;
         timeoutTouched = false;
@@ -667,7 +670,9 @@
         toast(T("toast.saved"));
       } else {
         setDirty();
-        toast(String(result?.message || result || "保存失败"));
+        const message = String(result?.message || result || "保存失败");
+        showJobError(message);
+        toast(message);
       }
     }
 
@@ -1091,8 +1096,12 @@
       renderDetail(entries.find((x) => x.id === e.id) || e);
       let cur = {};
       try { cur = await window.magpie.options.get() || {}; } catch { cur = {}; }
-      const result = await setOptions({ ...cur, _compare: { nonce, entryId: e.id, translator, replace: !!replace } });
-      toast(result === true ? (replace ? T("h.retried") : T("h.queued")) : String(result?.message || result || "提交失败"));
+      const job = { nonce, entryId: e.id, translator, replace: !!replace };
+      const built = window.translatorPageOptions ? window.translatorPageOptions(cur, null, job) : { error: "页面缺少 payload.js" };
+      if (built.error) { showJobError(built.error); toast(built.error); return; }
+      const result = await setOptions(built.options);
+      if (result === true) { showJobError(""); toast(replace ? T("h.retried") : T("h.queued")); }
+      else { const message = String(result?.message || result || "提交失败"); showJobError(message); toast(message); }
     }
     function select(id) {
       state.sel = id; state.compare = []; state.show = 1; state.pending = {}; state.openOriginal = false;
@@ -1184,7 +1193,7 @@
       if (demoCache) return demoCache;
       demoCache = [
         { id: "raft", at: new Date().toISOString(), agent: "Codex", model: "openai/gpt-6-astra", translator: "traex/doubao-seed-2.1-pro", language: "简体中文", style: PRESETS[0].style, ms: 2400, status: "done", original: "Short answer: a linearizable read in Raft must observe every write that was committed before the read started.\n\nThere are two standard ways to do it:\n\n- **ReadIndex** — the leader records its current commit index.\n- **Lease read** — the leader skips the extra round trip.\n\n```go\nfunc (n *node) LinearizableRead(ctx context.Context) error {\n    return n.applyWait.Wait(ctx, idx)\n}\n```", translation: "简单说：Raft 里的线性一致读，必须能看到读请求开始之前已经提交的所有写入。\n\n常见做法有两种：\n\n- **ReadIndex**：leader 先记下当前的 commit index。\n- **Lease read（租约读）**：leader 省掉那一轮心跳。\n\n```go\nfunc (n *node) LinearizableRead(ctx context.Context) error {\n    return n.applyWait.Wait(ctx, idx)\n}\n```", comparisons: [{ id: "c1", translator: "grok/grok-4.7-build-fast", translation: "一句话：Raft 中的线性一致读要求读到读请求开始前已提交的全部写入。\n\n标准做法有两种：\n\n- **ReadIndex**：leader 记录当前提交索引。\n- **Lease read**：leader 跳过额外往返。", ms: 1100, error: "" }] },
-        { id: "timeout", at: new Date(Date.now() - 600000).toISOString(), agent: "Pi", model: "cursor/grok-4.7", translator: "grok/grok-4.7-build-fast", language: "简体中文", style: PRESETS[0].style, ms: 30000, status: "error", error: "The operation timed out.（已重试一次）", original: "Here's the migration plan for moving the session store from Redis to Postgres:\n\n- Create the `sessions` table.\n- Dual-write for one release.", translation: "" },
+        { id: "timeout", at: new Date(Date.now() - 600000).toISOString(), agent: "Pi", model: "cursor/grok-4.7", translator: "grok/grok-4.7-build-fast", language: "简体中文", style: PRESETS[0].style, ms: 30000, status: "error", error: "The operation timed out.", original: "Here's the migration plan for moving the session store from Redis to Postgres:\n\n- Create the `sessions` table.\n- Dual-write for one release.", translation: "" },
         { id: "fail", at: new Date(Date.now() - 1200000).toISOString(), agent: "Claude Code", model: "anthropic/claude-sonnet-4.6", translator: "grok/grok-4.7-build-fast", language: "简体中文", style: PRESETS[0].style, ms: 800, status: "error", error: "HTTP 429", original: "Refactored the auth middleware: tokens are now verified once per request.", translation: "" },
       ];
       return demoCache;

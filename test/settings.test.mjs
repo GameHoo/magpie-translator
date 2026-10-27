@@ -38,7 +38,7 @@ test("路径安装和 github 安装都能对上 plugins.json 里的 spec", () =>
   fs.rmSync(root, { recursive: true, force: true })
 })
 
-test("保存删掉本机面板字段，并保留 gateway key", () => {
+test("保存删掉面板字段、密钥、feed 和模型列表", () => {
   const result = normalizeSettings({
     language: "English",
     prompt: "",
@@ -46,12 +46,13 @@ test("保存删掉本机面板字段，并保留 gateway key", () => {
     rules: [{ translator: "mock/zh" }],
     localPanel: true,
     panelPort: 44721,
-  }, { gatewayKey: "keep", feed: { entries: [] } })
+  }, { gatewayKey: "keep", feed: { entries: [] }, models: ["a/b"] })
   assert.equal(result.error, undefined)
-  assert.equal(result.options.gatewayKey, "keep")
+  assert.equal(result.options.gatewayKey, undefined)
   assert.equal(result.options.localPanel, undefined)
   assert.equal(result.options.panelPort, undefined)
-  assert.deepEqual(result.options.feed, { entries: [] })
+  assert.equal(result.options.feed, undefined)
+  assert.equal(result.options.models, undefined)
 })
 
 test("过长提示词在写入前被拒绝", () => {

@@ -1,41 +1,48 @@
+import { readFileSync } from "node:fs"
 import { parseTimeout } from "./config.mjs"
-import { DEFAULT_GATEWAY_KEY, DEFAULT_MAGPIE_BASE } from "./constants.mjs"
-import { restore } from "./mask.mjs"
+import { DEFAULT_MAGPIE_BASE } from "./constants.mjs"
+import { keepCode, restore } from "./mask.mjs"
 import { systemPrompt } from "./prompt.mjs"
 
+const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version
+export const USER_AGENT = `magpie-translator/${VERSION}`
+
+export function timeoutFor(job, opts = {}) {
+  const asked = parseTimeout(job?.translateTimeoutMs ?? job?.timeoutMs)
+  const cap = Number(opts.maxMs)
+  return cap > 0 ? Math.min(asked, cap) : asked
+}
+
+export function gatewayKeyFromEnv(env = process.env) {
+  const key = env.MAGPIE_TRANSLATOR_GATEWAY_KEY
+  return typeof key === "string" && key.trim() ? key.trim() : ""
+}
+
+// 只请求一次。超时和 5xx 不再由插件重试：重试会把一次本来已经很长的转述再拉长一倍。
 export async function translateJob(job, opts = {}) {
-  const asked = parseTimeout(job.translateTimeoutMs ?? job.timeoutMs)
-  const timeoutMs = Math.min(asked, Number(opts.maxMs) > 0 ? Number(opts.maxMs) : asked)
-  try {
-    return await translateOnce(job, opts, timeoutMs)
-  } catch (err) {
-    if (opts.signal?.aborted || !retriable(err)) throw err
-    try {
-      return await translateOnce(job, opts, timeoutMs)
-    } catch (again) {
-      const error = new Error(`${again?.message || again}（已重试一次）`)
-      error.cause = again
-      error.status = again?.status
-      throw error
-    }
-  }
+  const timeoutMs = timeoutFor(job, opts)
+  const raw = await translateOnce(job, opts, timeoutMs)
+  const restored = Array.isArray(job.slots) && job.slots.length ? restore(raw, job.slots) : raw
+  return keepCode(job.original || job.masked || "", restored)
 }
 
 async function translateOnce(job, { fetchImpl = globalThis.fetch, onDelta, signal } = {}, timeoutMs) {
   const base = String(job.magpieBaseUrl || DEFAULT_MAGPIE_BASE).replace(/\/$/, "")
+  const key = typeof job.gatewayKey === "string" ? job.gatewayKey.trim() : ""
+  const headers = {
+    "content-type": "application/json",
+    "user-agent": USER_AGENT,
+  }
+  if (key) headers.authorization = `Bearer ${key}`
   const res = await fetchImpl(`${base}/v1/chat/completions`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${job.gatewayKey || DEFAULT_GATEWAY_KEY}`,
-      "user-agent": "magpie-translator/0.1",
-    },
+    headers,
     body: JSON.stringify({
       model: job.translator,
       stream: true,
       messages: [
         { role: "system", content: systemPrompt(job) },
-        { role: "user", content: job.masked },
+        { role: "user", content: job.masked ?? job.original ?? "" },
       ],
     }),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
@@ -49,7 +56,7 @@ async function translateOnce(job, { fetchImpl = globalThis.fetch, onDelta, signa
   }
   const raw = await readModelText(res, onDelta)
   if (!String(raw).trim()) throw new Error("翻译模型没有返回文字")
-  return restore(raw, Array.isArray(job.slots) ? job.slots : [])
+  return raw
 }
 
 async function readModelText(res, onDelta) {
@@ -90,16 +97,6 @@ async function readSSE(res, onDelta) {
 
 function collectSSE(text, onDelta) {
   return applyLines(String(text).split("\n"), "", onDelta)
-}
-
-function retriable(err) {
-  const status = Number(err?.status)
-  if (status === 408 || status === 429 || status >= 500) return true
-  if (status >= 400) return false
-  const name = String(err?.name || "")
-  const message = String(err?.message || err)
-  if (name === "TimeoutError" || name === "AbortError") return true
-  return /timed out|timeout|aborted|fetch failed|network|ECONNRESET|EAI_AGAIN|socket hang up/i.test(message)
 }
 
 function applyLines(lines, out, onDelta) {

@@ -2,7 +2,6 @@
 export const MARKER = "MAGPIE_TRANSLATOR_SIDECAR_v1"
 
 export const DEFAULT_MAGPIE_BASE = "http://127.0.0.1:3425"
-export const DEFAULT_GATEWAY_KEY = "magpie-translator"
 export const MAX_MASKED_CHARS = 20000
 export const DEFAULT_TRANSLATE_TIMEOUT_MS = 120_000
 export const DEFAULT_HISTORY_LIMIT = 500

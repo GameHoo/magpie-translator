@@ -5,13 +5,19 @@ import { dataDir, ensureDir, logPath } from "./paths.mjs"
 
 let notifyMissing = false
 
-export async function persistItem(env, item, display, webhookUrl = "") {
+export function mayExport(origin, allowRemoteExport = false) {
+  if (allowRemoteExport) return true
+  return origin === "local"
+}
+
+export async function persistItem(env, item, display, webhookUrl = "", { origin = "", allowRemoteExport = false } = {}) {
   const modes = new Set(display || [])
   if (modes.has("log")) appendLog(env, item)
   if (modes.has("file")) writeLatest(env, item)
   if (modes.has("stdout")) writeStdout(item)
-  if (modes.has("notify")) notify(item)
-  if (modes.has("webhook") && webhookUrl) await postWebhook(webhookUrl, item)
+  const sendOut = mayExport(origin, allowRemoteExport)
+  if (modes.has("notify") && sendOut) notify(item)
+  if (modes.has("webhook") && webhookUrl && sendOut) await postWebhook(webhookUrl, item)
 }
 
 function appendLog(env, item) {

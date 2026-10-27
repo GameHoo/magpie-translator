@@ -7,6 +7,8 @@ import { test } from "bun:test"
 import { parseDisplay, presentation } from "../src/config.mjs"
 import { MARKER } from "../src/constants.mjs"
 import { onResponse } from "../src/hooks.mjs"
+import { mayExport } from "../src/sinks.mjs"
+import { drain } from "../src/worker.mjs"
 import { defaultTask, systemPrompt } from "../src/prompt.mjs"
 import { translateJob } from "../src/translate.mjs"
 
@@ -14,7 +16,9 @@ test("默认提示词带上目标语言，自定义提示词换掉任务句", ()
   const fallback = systemPrompt({ language: "日本語" })
   assert.match(fallback, /Rewrite the user's text into plain, easy-to-read 日本語\./)
   assert.match(fallback, new RegExp(MARKER))
-  assert.match(fallback, /⟦0⟧/)
+  assert.match(fallback, /Keep fenced code blocks/)
+  assert.equal(fallback.includes("⟦0⟧"), false)
+  assert.match(systemPrompt({ language: "日本語", slots: ["x"] }), /⟦0⟧/)
   assert.equal(/[\u4e00-\u9fff]/.test(fallback.replaceAll("日本語", "")), false)
 
   const custom = systemPrompt({ prompt: "用我的口吻解释", language: "English", style: "短句。" })
@@ -51,7 +55,8 @@ test("非中文目标语言写进默认提示词，提示本身不含中文", ()
   assert.match(french, /Rewrite the user's text into plain, easy-to-read Français\./)
   assert.equal(/[\u4e00-\u9fff]/.test(french), false)
   assert.match(french, new RegExp(MARKER))
-  assert.match(french, /⟦1⟧/)
+  assert.match(french, /Keep fenced code blocks/)
+  assert.equal(french.includes("⟦1⟧"), false)
   assert.match(french, /Output only the rewritten text/)
 
   const english = systemPrompt({ language: "English" })
@@ -86,6 +91,9 @@ test("规则上的语言、提示词、展示和翻译模型盖过全局", async
       webhookUrl: "http://127.0.0.1:9/hook",
     }],
   }
+  const fetchImpl = async () => new Response(JSON.stringify({ choices: [{ message: { content: "Hello." } }] }), {
+    headers: { "content-type": "application/json" },
+  })
   await onResponse(reply, {
     success: true,
     protocol: "chat",
@@ -93,10 +101,9 @@ test("规则上的语言、提示词、展示和翻译模型盖过全局", async
     request: { model: "any-vendor/some-model" },
     state: {},
     options,
-    fetch: async () => new Response(JSON.stringify({ choices: [{ message: { content: "Hello." } }] }), {
-      headers: { "content-type": "application/json" },
-    }),
+    fetch: fetchImpl,
   })
+  await drain(process.env, { fetchImpl })
   const [job] = JSON.parse(fs.readFileSync(path.join(home, "history.json"), "utf8"))
   assert.equal(job.model, "any-vendor/some-model")
   assert.equal(job.translator, "plugin-grok/grok-4")
@@ -169,6 +176,14 @@ test("日志、文件和 webhook 在 hook 里写完，不另开本机服务", as
   await new Promise((resolve) => translator.listen(0, "127.0.0.1", resolve))
   try {
     await assert.rejects(fetch("http://127.0.0.1:39991/health", { signal: AbortSignal.timeout(400) }))
+    const remoteOptions = {
+      models: [],
+      magpieBaseUrl: `http://127.0.0.1:${translator.address().port}`,
+      gatewayKey: "secret-gateway-key",
+      display: ["log", "file", "webhook", "notify"],
+      webhookUrl: `http://127.0.0.1:${webhook.address().port}/hook`,
+      rules: [{ translator: "my-relay/whatever-2099", language: "日本語" }],
+    }
     await onResponse({
       choices: [{ message: { role: "assistant", content: "Hello there." }, finish_reason: "stop" }],
     }, {
@@ -178,15 +193,29 @@ test("日志、文件和 webhook 在 hook 里写完，不另开本机服务", as
       model: "any-vendor/some-model",
       request: { model: "any-vendor/some-model", messages: [{ role: "user", content: "hi" }] },
       state: {},
-      options: {
-        models: [],
-        magpieBaseUrl: `http://127.0.0.1:${translator.address().port}`,
-        gatewayKey: "secret-gateway-key",
-        display: ["log", "file", "webhook"],
-        webhookUrl: `http://127.0.0.1:${webhook.address().port}/hook`,
-        rules: [{ translator: "my-relay/whatever-2099", language: "日本語" }],
-      },
+      origin: "remote",
+      options: remoteOptions,
     })
+    await drain(process.env)
+    assert.equal(hits.length, 0)
+    assert.equal(mayExport("remote", false), false)
+    assert.equal(mayExport("", false), false)
+    assert.equal(mayExport("gateway-key", false), false)
+    assert.equal(mayExport("local", false), true)
+    assert.equal(mayExport("remote", true), true)
+    await onResponse({
+      choices: [{ message: { role: "assistant", content: "Hello again from the model." }, finish_reason: "stop" }],
+    }, {
+      success: true,
+      protocol: "chat",
+      agent: "codex",
+      model: "any-vendor/some-model",
+      request: { model: "any-vendor/some-model", messages: [{ role: "user", content: "hi" }] },
+      state: {},
+      origin: "local",
+      options: remoteOptions,
+    })
+    await drain(process.env)
     const row = fs.readFileSync(path.join(home, "log.jsonl"), "utf8")
     assert.match(row, /こんにちは/)
     assert.equal(row.includes("secret-gateway-key"), false)

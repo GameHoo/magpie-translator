@@ -8,6 +8,7 @@ import { MARKER } from "../src/constants.mjs"
 import { extractUserText } from "../src/extract.mjs"
 import { readHistory } from "../src/history.mjs"
 import { onResponse } from "../src/hooks.mjs"
+import { drain } from "../src/worker.mjs"
 import { chatNextRequest, claudeNextRequest, codexNextRequest, geminiNextRequest } from "../src/replay.mjs"
 import { assembleAnthropic, assembleChat, assembleResponses, encodeSSE } from "../src/sse.mjs"
 
@@ -113,12 +114,13 @@ test("下一轮发给原模型的请求不含译文", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-proof-"))
   process.env.MAGPIE_TRANSLATOR_HOME = home
   process.env.XDG_CONFIG_HOME = home
-  const translator = await listen((_req, res, body) => {
+  const translator = await listen((req, res, body) => {
     const json = JSON.parse(body)
     assert.equal(json.messages[0].content.includes(MARKER), true)
-    assert.equal(json.messages[1].content.includes(CMD), false)
-    assert.match(json.messages[1].content, /⟦0⟧/)
-    const payload = `${ZH1}\n\n⟦0⟧\n\n${ZH2}`
+    assert.equal(json.messages[1].content.includes(CMD), true)
+    assert.equal(json.messages[1].content.includes("⟦0⟧"), false)
+    assert.equal(req.headers.authorization, undefined)
+    const payload = `${ZH1}\n\n${ZH2}`
     res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" })
     res.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: payload } }] })}\n\ndata: [DONE]\n\n`)
   })
@@ -198,6 +200,7 @@ test("下一轮发给原模型的请求不含译文", async () => {
       request: { model: "gpt-5.4", stream: true }, state: {},
     })
     assert.deepEqual(responsesReply, responses.hookReply)
+    await drain(process.env)
     const responsesItem = waitTranslation()
     const responsesWire = await sendToWorkModel(codexNextRequest({
       model: "gpt-5.4",
@@ -213,6 +216,7 @@ test("下一轮发给原模型的请求不含译文", async () => {
       success: true, options, agent: "claude", protocol: "anthropic", model: "claude-opus-4-7",
       request: { model: "claude-opus-4-7", stream: true }, state: {},
     })
+    await drain(process.env)
     const claudeItem = waitTranslation()
     const claudeWire = await sendToWorkModel(claudeNextRequest({
       model: "claude-opus-4-7",
@@ -228,6 +232,7 @@ test("下一轮发给原模型的请求不含译文", async () => {
       success: true, options, agent: "codex", protocol: "chat", model: "gpt-5.4",
       request: { model: "gpt-5.4", stream: true }, state: {},
     })
+    await drain(process.env)
     const chatItem = waitTranslation()
     const chatWire = await sendToWorkModel(chatNextRequest({
       model: "gpt-5.4",
@@ -243,6 +248,7 @@ test("下一轮发给原模型的请求不含译文", async () => {
       success: true, options, agent: "codex", protocol: "gemini", model: "gpt-5.4",
       request: { model: "gpt-5.4" }, state: {},
     })
+    await drain(process.env)
     const geminiItem = waitTranslation()
     const geminiWire = await sendToWorkModel(geminiNextRequest({
       model: "gpt-5.4",
@@ -258,6 +264,7 @@ test("下一轮发给原模型的请求不含译文", async () => {
       success: true, options, agent: "codex", protocol: "responses", model: "gpt-5.4",
       request: { model: "gpt-5.4" }, state: {},
     })
+    await drain(process.env)
     assert.equal(readHistory().length, itemsBefore)
     assert.equal(translator.bodies.length, callsBefore)
     const toolText = gathered(await sendToWorkModel(codexNextRequest({

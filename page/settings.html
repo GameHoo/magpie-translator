@@ -66,12 +66,12 @@
         <label class="switch"><input type="checkbox" id="skip" checked data-dirty><span class="track"></span></label>
       </div>
       <div class="row">
-        <div class="label"><b><span data-i18n="disp.code">代码块与命令保持原样</span><span class="lock"><svg class="i xs"><use href="#i-lock"/></svg><span data-i18n="common.always">始终开启</span></span></b>
-          <small data-i18n="disp.code.sub">``` 代码块、行内 `code`、路径和命令不会交给翻译模型改写</small></div>
+        <div class="label"><b><span data-i18n="disp.code">代码块与命令保持原样</span><span class="lock"><svg class="i xs"><use href="#i-lock"/></svg><span data-i18n="common.always">始终核对</span></span></b>
+          <small data-i18n="disp.code.sub">默认不遮住代码，模型看得到原文。围栏代码块在转述后换回原文。要遮住再在命令行打开 maskCode</small></div>
         <label class="switch"><input type="checkbox" checked disabled><span class="track"></span></label>
       </div>
       <div class="row" id="timeoutRow">
-        <div class="label"><b data-i18n="disp.timeout">超时</b><small data-i18n="disp.timeout.sub">超过后放弃本次翻译，记录为「超时」。magpie 最多等 gatewayTimeoutMs（10 秒）</small></div>
+        <div class="label"><b data-i18n="disp.timeout">超时</b><small data-i18n="disp.timeout.sub">工人最多等这么久（10～120 秒），到点记为超时。hook 只负责入队并马上返回</small></div>
         <div>
           <div class="slider"><input type="range" id="timeout" min="0" max="5" step="1" value="5" data-dirty><span class="val" id="timeoutVal">120 s</span></div>
           <div class="ticks"><span>10</span><span>20</span><span>30</span><span>60</span><span>90</span><span>120</span></div>
@@ -130,8 +130,10 @@
     </div>
   </div>
 </main>
+<p class="sub" id="jobError" hidden></p>
 <div class="toast" id="toast"><svg class="i sm"><use href="#i-check"/></svg><span></span></div>
 <script src="_magpie/bridge.js"></script>
+<script src="payload.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -32,6 +32,7 @@ test("历史有上限，公开 feed 不含密钥", () => {
   assert.equal(kept.masked, "masked-one")
   assert.equal(publicEntry(kept).masked, undefined)
   const feed = JSON.stringify(publicFeed(rows))
+  assert.equal(JSON.parse(feed).at, undefined)
   assert.equal(feed.includes("secret-gateway-key"), false)
   assert.equal(feed.includes("masked-one"), false)
   assert.equal(feed.includes("secret prompt"), false)

@@ -45,7 +45,7 @@ export function recordTranslation(entry, env = process.env, limit = DEFAULT_HIST
     style: entry.style || "",
     masked: entry.masked || "",
     slots: Array.isArray(entry.slots) ? entry.slots : [],
-    magpieBaseUrl: entry.magpieBaseUrl || "",
+    maskCode: !!entry.maskCode,
     truncated: !!entry.truncated,
     comparisons: [],
   }
@@ -106,7 +106,18 @@ export function publicEntry(entry) {
 // 页面通过 magpie.options.get() 读到的那一份。最新的在前，超长的丢掉尾巴，
 // 整份超过预算就少放几条。磁盘上的 history.json 仍是全文。
 export function publicFeed(rows = []) {
-  return { at: new Date().toISOString(), entries: fitEntries(rows.map(publicEntry)) }
+  return { entries: fitEntries(rows.map(publicEntry)) }
+}
+
+export function writePublicFeed(env = process.env) {
+  const file = path.join(dataDir(env), "feed.json")
+  const next = JSON.stringify(publicFeed(readHistory(env)))
+  try {
+    if (fs.readFileSync(file, "utf8") === next) return false
+  } catch { /* 还没有这份文件 */ }
+  ensureDir(dataDir(env))
+  fs.writeFileSync(file, next, { mode: 0o600 })
+  return true
 }
 
 function fitEntries(entries) {

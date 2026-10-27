@@ -46,9 +46,12 @@ test("the prompt box shows the English default the hook actually uses", () => {
 
 test("history actions are options writes, and the feed is read from options", () => {
   const app = read("app.js")
-  expect(app).toContain("_compare")
+  expect(read("payload.js")).toContain("_compare")
   expect(app).toContain("options.get")
   expect(app).toContain("feed")
   expect(app).toMatch(/data-act="retry"|data-act="compare"/)
   expect(app).toContain("JSON.stringify")
+  expect(app).toContain("translatorPageOptions")
+  expect(app).toContain("jobError")
+  expect(app).not.toContain("...cur")
 })

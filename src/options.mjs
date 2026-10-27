@@ -243,6 +243,9 @@ export function normalizeSettings(input, previous = {}) {
   delete options.localPanel
   delete options.panelPort
   delete options._compare
+  delete options.gatewayKey
+  delete options.feed
+  delete options.models
   return { options }
 }
 
@@ -370,35 +373,6 @@ export function saveSettings(input, env = process.env, locate = {}) {
   }
   const view = viewOptions(normalized.options)
   return { spec: entry.spec, file, changed, options: view, preserved: view.preserved }
-}
-
-// 把页面能读的 feed / models 写进 plugins.json 里这一条的 options。
-// 这是 magpie 允许页面读到的插件自己的存储（magpie.options）。
-// 内容没变就不写：写入会让宿主在下一次请求时重启。
-export function publishRuntime(env = process.env, { feed, models, clearJob = false } = {}) {
-  let loaded
-  try { loaded = readPluginList(env) } catch { return false }
-  if (loaded.missing) return false
-  const entry = findPlugin(loaded.list, env, {})
-  if (!entry) return false
-  const options = entry.options && typeof entry.options === "object" && !Array.isArray(entry.options) ? { ...entry.options } : {}
-  let changed = false
-  if (feed && JSON.stringify(options.feed ?? null) !== JSON.stringify(feed)) {
-    options.feed = feed
-    changed = true
-  }
-  if (Array.isArray(models) && JSON.stringify(options.models ?? null) !== JSON.stringify(models)) {
-    options.models = models
-    changed = true
-  }
-  if (clearJob && options._compare) {
-    delete options._compare
-    changed = true
-  }
-  if (!changed) return false
-  entry.options = options
-  writeList(loaded.file, loaded.list)
-  return true
 }
 
 export const DEFAULTS = { language: DEFAULT_LANGUAGE, display: [...DEFAULT_DISPLAY] }

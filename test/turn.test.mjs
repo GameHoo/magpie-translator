@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { test } from "bun:test"
 import { onResponse } from "../src/hooks.mjs"
+import { drain } from "../src/worker.mjs"
 import { skipReason } from "../src/turn.mjs"
 
 test("纯 JSON、结构化输出、标题请求和没有用户轮次的请求都跳过", () => {
@@ -62,6 +63,7 @@ test("建议 JSON 不会进收件箱，普通回复会", async () => {
     options,
     fetch,
   })
+  await drain(process.env, { fetchImpl: fetch })
   const saved = JSON.parse(fs.readFileSync(path.join(home, "history.json"), "utf8"))
   assert.equal(saved.length, 1)
   assert.match(saved[0].original, /mtime/)
