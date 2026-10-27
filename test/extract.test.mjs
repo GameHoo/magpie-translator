@@ -67,6 +67,44 @@ test("Responses 只取 final_answer，推理和工具调用都跳过", () => {
   assert.equal(got.text.includes("hidden thought"), false)
 })
 
+test("Codex 主回合：推理条目后面的 message 没有 phase 也要留下", () => {
+  const text = "线性一致读要求读到的状态不比已经对外确认的写入更旧。"
+  const got = extractUserText({
+    object: "response",
+    status: "completed",
+    output: [
+      { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "先想清楚 quorum" }] },
+      { type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text }] },
+    ],
+  }, "responses")
+  assert.equal(got.text, text)
+  assert.equal(got.text.includes("quorum"), false)
+})
+
+test("工具调用之后的 Responses 正文留下，工具前面的铺垫丢掉", () => {
+  const got = extractUserText({
+    output: [
+      { type: "reasoning", content: [{ type: "reasoning_text", text: "hidden" }] },
+      { type: "message", phase: "commentary", content: [{ type: "output_text", text: "Looking now." }] },
+      { type: "function_call", name: "bash", call_id: "c1", arguments: "{}" },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "The read is linearizable." }] },
+    ],
+  }, "responses")
+  assert.equal(got.text, "The read is linearizable.")
+  assert.equal(got.text.includes("Looking now"), false)
+})
+
+test("只有铺垫句、后面跟着工具时不转述", () => {
+  const got = extractUserText({
+    output: [
+      { type: "message", phase: "commentary", content: [{ type: "output_text", text: "Looking now." }] },
+      { type: "function_call", name: "bash", call_id: "c1", arguments: "{}" },
+    ],
+  }, "responses")
+  assert.equal(got.skip, "tool_round")
+  assert.equal(got.text, "")
+})
+
 test("没有 final_answer 标记、也没有工具时，Responses 正文仍然转述", () => {
   const got = extractUserText({
     output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "Plain answer." }] }],
