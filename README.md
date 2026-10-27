@@ -4,7 +4,7 @@ This plugin translates the final reply of a work model with another model you al
 
 The default language is `简体中文`. A rule can override it with `English`, `日本語`, `Français`, or any other name a person would recognize. The default instruction is English and inserts that name. It does not assume the translation is Chinese.
 
-Settings and the translation history live in magpie: a settings panel, and a sidebar page for comparing the original with the translation. The old page at `127.0.0.1:44721` stays off unless `display` includes `panel` or `localPanel` is true. `npm test` is 48 tests, last run on 2026-10-27. No Codex app and no magpie window were opened in that run.
+Settings and the translation history live in magpie: a settings panel, and a sidebar page for comparing the original with the translation. The old page at `127.0.0.1:44721` stays off unless `display` includes `panel` or `localPanel` is true. `npm test` is 51 tests, last run on 2026-10-27. No Codex app and no magpie window were opened in that run. The two pages were opened in a browser as static files at `http://127.0.0.1:44731/` (settings in light and dark, the model picker, history compare, the timeout card, and the narrow tab layout), not inside magpie.
 
 中文说明：[README.zh-CN.md](README.zh-CN.md)。设计取舍和核验记录：[docs/DESIGN.md](docs/DESIGN.md)。核验日期 2026-10-27。
 
@@ -54,7 +54,7 @@ You need a local magpie that is already running, at version 0.1.1273 or later, a
 
    The JSON you pass to `plugin options` replaces the plugin's options. It does not merge with the previous JSON. The next finished reply uses the new `language`. You do not restart magpie for that change. Each reply is translated once, from the original into that rule's language. The translation is not sent back to the work model, so it is not translated again into a second language.
 
-4. Let the work model answer one turn through magpie. Point the client magpie already routes (Codex, Claude Code, or another client) at magpie, then ask it something. Open magpie's sidebar page titled Translations (中文标题是「转述记录」). Before any matching reply, the page says there is no translation yet. After one, the row shows the agent, work model, translator, language, latency, and time. The page chrome is Chinese. The language of the translation is the `language` on the row, not the language of the chrome.
+4. Let the work model answer one turn through magpie. Point the client magpie already routes (Codex, Claude Code, or another client) at magpie, then ask it something. Open magpie's sidebar page titled Translations (中文标题是「翻译记录」). Before any matching reply, the page says there is no translation yet. After one, the row shows the agent, work model, translator, language, latency, and time. The page chrome is Chinese. The language of the translation is the `language` on the row, not the language of the chrome.
 
 `magpie plugin list` still prints `async gateway hook onRequest`, and the hook row in the window says it is waiting for a request. Those two lines are magpie's own labels. This plugin does export `onResponse`. It does not call `ctx.report`, because that status is for plugins that inject context.
 
@@ -74,20 +74,24 @@ A card whose translator cannot be reached keeps the original sentence and shows 
 
 ## Settings and history inside magpie
 
-The settings panel is the plugin's settings slot. The history page is the plugin's own sidebar tab. Both files are under `ui/`. Magpie does not allow a page to call `fetch`, open a WebSocket, or use an inline script, so both pages load scripts from that folder.
+The settings panel is the plugin's settings slot (`ui/settings.html`, Chinese title 「翻译设置」). The history page is the plugin's own sidebar tab (`ui/history.html`, Chinese title 「翻译记录」). Both files are under `ui/`, and both load `ui/style.css` and `ui/app.js`. Magpie does not allow a page to call `fetch`, open a WebSocket, submit a form, or use an inline script, so both pages load scripts from that folder, including `_magpie/bridge.js`.
+
+The plugin picture is `ui/icon.svg`: an indigo rounded square (`#5b5bd6`, with a lighter indigo gradient) and a white translate mark. The strokes are `#ffffff`, not `currentColor`, so the same file stays readable on a light list and a dark list. On 2026-10-27 that file was opened at 64, 20 and 16 pixels on `#fafafa` and `#0b0b0c`. `magpie.icon` is the same SVG as a `data:image/svg+xml` URI (1,255 characters). Decoding it gives the file byte for byte. Discover and the installed-plugin row read this field. `magpie.page.icon` is `ui/icon.svg`; magpie stores that as `icon.svg` next to the page, and the sidebar tab uses it. Magpie's panel struct has no icon field, checked in `internal/plugin/page.go` (`PanelSpec` is slot, title, titles, file). The settings card therefore has no separate picture; the heading is the panel title. Those three magpie lists were not opened here: this machine has no magpie window.
 
 The worker writes two files next to those pages:
 
 - `ui/catalog.js` is the model list from the local gateway's `/v1/models`, or from `magpie models` if the gateway list is empty. It refreshes about once a minute.
 - `ui/feed.js` is the recent history the page shows. It is not written into `plugins.json`. Writing options reloads magpie's hook host, so a translation must not do that.
 
-`providers:list` returns provider ids and names, not model ids. The settings panel uses those ids as `providerId/*` (every model from that provider, including ones added later) and uses the catalog for a concrete translator id. You can still type an id that is not listed.
+`providers:list` returns provider ids and names, not model ids. The model picker groups concrete ids from `catalog.js` and from `usage:summary`, under the provider names from `providers:list`. A source rule can also pick “all models” or “all of this provider” (`providerId/*`). There is no free-text model field. An id already saved on a rule stays in the picker even if the catalog has not listed it yet.
 
 Saving settings calls `magpie.options.set` with the previous options merged in, so `gatewayKey`, `panelPort`, `magpieBaseUrl`, and `gatewayTimeoutMs` stay. A normal save drops a pending `_compare`. Saving reloads the hook host once. The next finished reply uses the new options. The Bun hook itself does not call `magpie.options.set`.
 
-On a history row, 对照翻译 picks another translator and sets `_compare` once. The worker translates the stored original again and stacks that result on the same row. It does not start a new card. If the worker is not running, the compare waits until the next hooked request. The page cannot download a file. Export puts the filtered rows in a text box.
+On a history row, “用其他模型对比…” picks another translator and sets `_compare` once. The worker translates the stored original again and adds a column on that row. It does not start a new card, and it does not write `plugins.json` a second time to clear `_compare`. “重新翻译” and “重试” set `_compare.replace` so the same row's translation is replaced. `options.set` is serialized and waits so two clicks are at least 1.1 seconds apart. If the worker is not running, the job waits until the next hooked request. The frame cannot download a file (`sandbox` has no downloads). Export copies JSON or Markdown. Clipboard may be refused; the page then tries `document.execCommand("copy")`.
 
-History is `history.json` in the data directory. The default cap is the last 500 rows (`historyLimit`, from 20 to 2000). The script the page loads omits the gateway key, the masked text, the placeholders, the prompt, and the magpie address.
+The history page lays each paragraph, list, and code block on one grid row, so columns scroll together. At 760px and below, those columns become tabs. Timeout and other failures draw the error card from the real error string. The page does not have token counts or a gateway request id, so those two bits from the design mock are left out.
+
+History is `history.json` in the data directory. The default cap is the last 500 rows. The panel offers 100, 500, 1000, 5000, and “don't keep” (`0`, which clears the file on the next translation). Any other positive value is clamped to 20–5000. The script the page loads omits the gateway key, the masked text, the placeholders, the prompt, and the magpie address. It does include `style`, so the row can name the preset.
 
 The picture below is the optional localhost settings page, taken on 2026-10-27. It is not the magpie panel. File: `docs/panel_settings.png`.
 
@@ -128,7 +132,13 @@ Vendor API keys stay in `magpie provider`. Leave `gatewayKey` unset unless your 
 | `webhookUrl` | empty | Used when `display` includes `webhook`. Must be http or https |
 | `translateTimeoutMs` | `120000` | One translator call. Clamped to 10–600 seconds. A timeout, a dropped connection, or HTTP 408, 429, or 5xx is tried once more. Other 4xx errors are not. The second failure says `（已重试一次）` |
 | `rewriteSameLanguage` | false | When false, prose that is already in the target language is not sent. A rule can set the same field to override this. Unknown language names are still translated. Recognized names include 简体中文, 繁体中文, English, 日本語, 한국어, and a few others. French and other Latin languages are not treated as English |
-| `historyLimit` | `500` | How many rows `history.json` keeps. Clamped to 20–2000 |
+| `historyLimit` | `500` | How many rows `history.json` keeps. `0` stores nothing and clears the file on the next translation. Any other number is clamped to 20–5000 |
+| `enabled` | true | The header switch. `false` skips new translations. It does not flip magpie's own plugin off switch, which a page cannot set. Compare of an existing row still runs |
+| `placement` | `beside` | History layout only: `beside`, `below`, or `only`. It does not change the agent session. The session still receives the original reply |
+| `showTranslatorBadge` | true | Show the translator id and latency on a history column |
+| `collapseOriginal` | false | In `below` placement, start with the original collapsed |
+
+The settings prompt box shows a Chinese template with `{language}`, `{style}`, `{model}`, and `{translator}`. If you save without editing that box, `prompt` stays empty and the hook keeps the English task sentence below. Editing the box replaces the task sentence with what you wrote. The four style cards write an English sentence into `style` (plain speech, keep terms, brief, full). The timeout slider offers 10, 20, 30, 60, 90, and 120 seconds. A larger value set from the CLI stays until you move the slider.
 
 The default task sentence, with the language name already filled in, is:
 
