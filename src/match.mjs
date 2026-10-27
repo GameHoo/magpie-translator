@@ -2,7 +2,8 @@
 // agent、model、translator 都是字符串，对应 magpie 里任意已配置的 provider/model。
 // agent 省略表示所有 agent。model 省略表示所有模型。
 // model 写成 vendor/name 或 name 都认；带前缀的 id 用最后一段再比一次。
-// 不带 * 时，name 对得上 name，对不上 name-mini。末尾加 * 才做前缀匹配。
+// * 可以出现在任意位置，大小写不敏感。末尾的 * 仍是前缀，中间的 * 匹配任意一段。
+// 不带 * 时整段相等。问号保持字面量，不当作单字符通配。
 
 export function matchRule(options, { agent = "", model = "" } = {}) {
   const rules = options?.rules
@@ -35,10 +36,15 @@ function modelOk(pattern, model) {
   const bare = id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id
   return list.some((raw) => {
     const p = raw.trim()
-    if (p.endsWith("*")) {
-      const stem = p.slice(0, -1)
-      return id.startsWith(stem) || bare.startsWith(stem)
-    }
-    return id === p || bare === p
+    return globHit(p, id) || globHit(p, bare)
   })
+}
+
+function globHit(pattern, value) {
+  const body = pattern.split("*").map(escapeRegExp).join(".*")
+  return new RegExp(`^${body}$`, "i").test(value)
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[\\^$+?.()|[\]{}]/g, "\\$&")
 }
