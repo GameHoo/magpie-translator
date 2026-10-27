@@ -1,131 +1,146 @@
-# magpie 旁路转述
+# magpie-translator
 
-这个插件把你选定的工作模型的最终回复，用另一个已在 magpie 里配好的模型，转述成你指定的语言。默认是通俗中文。转述出现在本机页面或其他出口上。agent 拿到的仍是原文，下一轮发回工作模型的内容里没有译文。
+This plugin translates the final reply of a work model with another model you already configured in magpie. Set `language` to any language name. The agent still receives the original reply, and the next request sent back to the work model does not contain the translation.
 
-设计取舍和核验记录在 [docs/DESIGN.md](docs/DESIGN.md)。核验日期 2026-10-27。
+The default language is `简体中文`. A rule can override it with `English`, `日本語`, `Français`, or any other name a person would recognize. The default instruction is English and inserts that name. It does not assume the translation is Chinese.
 
-## 装上并写一条规则
+中文说明：[README.zh-CN.md](README.zh-CN.md)。设计取舍和核验记录：[docs/DESIGN.md](docs/DESIGN.md)。核验日期 2026-10-27。
 
-需要本机已经在跑的 magpie（异步 gateway hook，0.1.1273 及以后；本文按 0.1.1731 核对），以及 Node.js 20 或以上（跑测试和手动打开页面时用）。magpie 用它自带的 Bun 跑 hook。
+## Install and write one rule
 
-1. 看翻译模型的 id。下面命令印出的 `provider/model` 都能填，包括插件提供的 provider：
+You need a local magpie that is already running, at version 0.1.1273 or later, and Node.js 20 or later (for tests and for opening the page yourself). `magpie version` prints the version. This text was checked against 0.1.1731. Magpie runs the hook with the Bun it ships. The hook is the plugin entry magpie calls after a request; you do not start it yourself.
+
+1. List translator ids. Every `provider/model` line is valid, including providers added by plugins:
 
    ```bash
    magpie models
    ```
 
-2. 装上这个目录（名字就是你写的路径）：
+   If the model you want is not listed, add its provider first, then list again. For a vendor magpie already knows: `magpie provider add deepseek sk-...`. `magpie provider --help` shows the other fields.
+
+2. Install this repo. `<name>` in the next step is whatever `plugin list` prints:
 
    ```bash
-   magpie plugin add /path/to/magpie-plain-zh
+   magpie plugin add github:GameHoo/magpie-translator
    magpie plugin list
    ```
 
-3. 把规则写进去。`<名字>` 用上一步列表里的那一项。`translator` 和 `model` 换成你的 id。规则为空时什么都不转述。
+   A local checkout works the same way: `magpie plugin add /path/to/magpie-translator`. The name is then that path.
+
+3. Write the rules. Replace `model` and `translator` with ids from step 1. An empty `rules` array translates nothing. This example translates matching work models into English, and Claude models into Japanese:
 
    ```bash
-   magpie plugin options <名字> '{
-     "language": "简体中文",
-     "style": "用短句，像在跟同事解释。",
+   magpie plugin options <name> '{
+     "language": "English",
+     "style": "Use short sentences.",
      "display": ["panel", "log"],
      "panelPort": 44721,
      "rules": [
-       { "model": "gpt-5*", "translator": "deepseek/deepseek-chat" }
+       { "model": "gpt-5*", "translator": "deepseek/deepseek-chat" },
+       { "model": "claude-*", "translator": "gemini/gemini-2.5-flash", "language": "日本語" }
      ]
    }'
    ```
 
-4. 让工作模型经 magpie 回答一轮。然后打开 <http://127.0.0.1:44721> 。卡片上的语言、工作模型和翻译模型来自这一轮的配置。
+   A single rule into French:
 
-`package.json` 里的 `magpie.options` 只是示例。生效的是 `magpie plugin options` 写进去的那份。
+   ```json
+   { "model": "gpt-5*", "translator": "deepseek/deepseek-chat", "language": "Français" }
+   ```
 
-## 规则怎么匹配
+   The JSON you pass to `plugin options` replaces the plugin's options. It does not merge with the previous JSON. The next finished reply uses the new `language`. You do not restart magpie for that change. Each reply is translated once, from the original into that rule's language. The translation is not sent back to the work model, so it is not translated again into a second language.
 
-规则按书写顺序，第一条命中的生效。
+4. Let the work model answer one turn through magpie. Point the client magpie already routes (Codex, Claude Code, or another client) at magpie, then ask it something. Open <http://127.0.0.1:44721>. Before any matching reply, the page says there is no translation yet. After one, the card shows the language, work model, and translator from that turn. The page chrome is Chinese. The language of the translation is the `language` on the card, not the language of the chrome.
 
-| 写法 | 命中 |
+`magpie.options` inside `package.json` is only an example. The live config is what `magpie plugin options` writes.
+
+## How a rule matches
+
+Rules are tried in the order you write them. The first hit wins.
+
+| Pattern | What it matches |
 | --- | --- |
-| 省略 `agent` | 所有客户端 |
-| 省略 `model` | 所有模型 |
-| `"model": "gpt-5.4"` | `gpt-5.4` 和 `openai/gpt-5.4`。不命中 `gpt-5.4-mini` |
-| `"model": "gpt-5*"` | 完整 id 或最后一段以 `gpt-5` 开头 |
-| `"agent": "codex"` | 整词，不区分大小写 |
+| omit `agent` | every client |
+| omit `model` | every model |
+| `"model": "gpt-5.4"` | `gpt-5.4` and `openai/gpt-5.4`. It does not match `gpt-5.4-mini` |
+| `"model": "gpt-5*"` | a full id, or the last segment, that starts with `gpt-5` |
+| `"agent": "codex"` | the whole word, case-insensitive |
 
-`agent` 要和页面卡片上显示的名字一致。限定某个客户端之前，可以先只写 `model`，看卡片上的名字，再补上 `agent`。
+`agent` must be the name shown on the panel card. To pin one client, first match on `model` only, read the name on the card, then add `agent`.
 
-同一条规则里可以盖过全局的 `language`、`prompt`、`style`、`display`、`webhookUrl`。例如工作模型走中文、另一个模型走英文：
+A rule can override the global `language`, `prompt`, `style`, `display`, and `webhookUrl`. Omit `language` on a rule to keep the global one. The global default, when you omit it too, is `简体中文`.
 
-```json
-{
-  "language": "简体中文",
-  "rules": [
-    { "model": "gpt-5*", "translator": "deepseek/deepseek-chat" },
-    { "model": "claude-*", "translator": "gemini/gemini-2.5-flash", "language": "English" }
-  ]
-}
-```
+Vendor API keys stay in `magpie provider`. Leave `gatewayKey` unset unless your magpie already requires a specific bearer for local calls. The worker then sends `magpie-translator`. If you already set a named gateway key, put that same string in `gatewayKey`.
 
-厂商的 API key 仍放在 `magpie provider` 里。插件配置里的 `gatewayKey` 只用于工人回叫本机 magpie，默认 `magpie-plain-zh`。你若给 magpie 配了具名网关钥匙，把同一把写进 `gatewayKey`。
+## Language, prompt, and where the translation goes
 
-## 语言、提示词和出口
-
-| 字段 | 默认 | 说明 |
+| Field | Default | What it does |
 | --- | --- | --- |
-| `language` | `简体中文` | 默认提示词中的目标语言，如 `日本語`、`English` |
-| `prompt` | 空 | 写了就只换掉「改写成某种语言」那一句，最长 4000 字。内部记号、占位符必须原样保留、只输出正文，这三样仍在 |
-| `style` | 空 | 追加一句口气，最长 4000 字 |
-| `display` | `panel,log` | 见下表 |
-| `panelPort` | `44721` | 页面端口，只监听 127.0.0.1 |
-| `webhookUrl` | 空 | `display` 含 `webhook` 时使用，须是 http 或 https |
+| `language` | `简体中文` | The language name inserted into the default prompt. Any name works, such as `English`, `日本語`, or `Français` |
+| `prompt` | empty | Replaces only the task sentence, up to 4000 characters. Three pieces stay: an internal marker so the plugin does not translate its own request, the placeholder rule, and "Output only the rewritten text." |
+| `style` | empty | One extra line about tone, up to 4000 characters |
+| `display` | `panel,log` | See the next table |
+| `panelPort` | `44721` | Page port. Listens on 127.0.0.1 only |
+| `webhookUrl` | empty | Used when `display` includes `webhook`. Must be http or https |
 
-| `display` 的值 | 去哪看 |
+The default task sentence is:
+
+`Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary.`
+
+These two lines are always kept:
+
+`Placeholders such as ⟦0⟧ and ⟦1⟧ stand for code or commands. Keep each one exactly where it is, including the brackets and the number. Do not translate, delete, or move them.`
+
+`Output only the rewritten text.`
+
+| `display` value | Where to look |
 | --- | --- |
-| `panel` | 浏览器打开 `http://127.0.0.1:44721`（或你的 `panelPort`） |
-| `log` | `~/.local/share/magpie-plain-zh/log.jsonl` |
-| `file` | 同一目录的 `latest.txt`，`tail -f` 可当终端面板 |
-| `stdout` | 前台运行 `node src/panel.mjs` 时打在终端。由 hook 拉起时标准输出是丢掉的 |
-| `notify` | `notify-send`。没有这个命令就跳过 |
-| `webhook` | 向 `webhookUrl` POST JSON。正文里没有网关钥匙 |
+| `panel` | Open `http://127.0.0.1:44721` (or your `panelPort`) |
+| `log` | `~/.local/share/magpie-translator/log.jsonl` |
+| `file` | `latest.txt` in that same directory. `tail -f` works as a terminal view |
+| `stdout` | Printed when you run `node src/panel.mjs` in the foreground. A worker started by the hook discards stdout |
+| `notify` | `notify-send`. If that command is missing, this sink is skipped |
+| `webhook` | POST JSON to `webhookUrl`. The body does not include the gateway key |
 
-数据目录可以用 `MAGPIE_PLAIN_ZH_HOME` 或 `XDG_DATA_HOME` 改。默认是 `~/.local/share/magpie-plain-zh`。
+Change the data directory with `MAGPIE_TRANSLATOR_HOME` or `XDG_DATA_HOME`. The default is `~/.local/share/magpie-translator`.
 
-改了 `panelPort` 之后，结束该目录 `panel.pid` 里的进程，下一轮回复会按新端口拉起。只改 `display` 时，已经在跑的工人会按新任务的出口送出；加上 `panel` 时它会补开页面。
+After you change `panelPort`, stop the process recorded in `panel.pid` in that directory. The next reply starts a worker on the new port. Changing only `display` applies to the next job. Adding `panel` opens the page if it was not listening.
 
-页面打不开时，在同一个用户下执行：
+If the page does not open, run this as the same user, from the directory that contains `src/panel.mjs`:
 
 ```bash
 node src/panel.mjs
 ```
 
-它和 hook 共用上面的数据目录，会把收件箱里的任务译出来。
+For a path install, `magpie plugin list` prints that directory. It shares the data directory with the hook and translates jobs already in the inbox.
 
-## 哪些字会送去转述
+## What gets translated
 
-只送面向用户的最终正文。工具调用、推理、思考块不送。有工具调用时，Anthropic、Chat、Gemini 整段不送；Responses 只保留标成最终回答的正文，铺垫句不送。
+Only the final prose a person is meant to read. Tool calls, reasoning, and thinking blocks are left out. Magpie labels each request with one of four JSON shapes: `chat`, `responses`, `anthropic`, or `gemini`. Codex usually uses `responses`. Claude Code uses `anthropic`. A typical chat app uses `chat`. When a turn contains a tool call, `anthropic`, `chat`, and `gemini` turns are skipped entirely. A `responses` turn keeps only text marked as the final answer. Commentary and other text that is not marked final is skipped.
 
-围栏代码、没合上的代码围栏、行内代码、以 `$ ` 开头的命令行会换成占位符再送。译文回来后按原样嵌回。翻译模型弄丢的那几段补在末尾，已经嵌回的不重复。整段都是代码时不发送。遮罩后超过 20000 个字符时从第 20000 个字符处截断，不找段落边界，页面会标明截断。
+Fenced code, an unclosed fence, inline code, and lines that start with `$ ` are replaced with placeholders before the translator sees them, then restored. Placeholders the translator drops are appended at the end. Slots that were restored are not repeated. A turn that is only code is not sent. After masking, text longer than 20000 characters is cut at character 20000. The page marks that cut.
 
-翻译在这一轮结束之后进行。agent 里先出现原文，转述随后出现在出口上。流式输出不会被改写。
+Translation runs after the turn finishes. The agent sees the original first. The translation shows up on the sinks afterward. The live stream is not rewritten.
 
-agent 的原流程在这些情况下都照常。hook 写盘失败时，收件箱里没有这条，页面和日志也不会出现它。翻译请求失败或翻译模型没有返回文字时，页面和日志留下原文和错误原因。
+The original flow continues in every failure case. If the hook cannot write the job to disk, the inbox has no record and the page and log do not show it. If the translator request fails or returns no text, the page and the log keep the original plus the error.
 
-## 为什么下一轮没有译文
+## Why the next request has no translation
 
-插件不修改 magpie 写给 agent 的字节。Codex、Claude Code 和 Chat 客户端存进历史、下一轮再发出去的，是它们自己收到的原文。工人的翻译请求不带会话 id，也不会被写回工作模型的上下文。
+The plugin does not change the bytes magpie writes to the agent. Codex, Claude Code, and Chat clients store what they received and send that back. The worker's translation request has no session id, so it is not written back into the work model's context.
 
-若要核对这件事，看 [docs/DESIGN.md](docs/DESIGN.md) 的验证记录。本地可以跑：
+The checks for that claim are in [docs/DESIGN.md](docs/DESIGN.md). Locally:
 
 ```bash
 npm test
 MAGPIE_BIN=/path/to/magpie npm run e2e
 ```
 
-`npm test` 里有一条「下一轮发给原模型的请求不含译文」。`npm run e2e` 用真实 magpie 网关再走一遍 Chat 续轮，并看 Responses、Anthropic 的客户端流仍是原文。
+`npm test` includes "下一轮发给原模型的请求不含译文" and a case that sets `language` to `Français`. `npm run e2e` walks a real magpie gateway for a Chat follow-up turn, and checks that Responses and Anthropic client streams stay in the original text.
 
-不接 magpie、只看页面时：
+To look at the page without magpie:
 
 ```bash
 npm run demo
 ```
 
-演示开在 <http://127.0.0.1:44721> ，用的是假的翻译模型，不需要厂商密钥。
+The demo listens on <http://127.0.0.1:44721> and uses a fake translator. No vendor key is required.
