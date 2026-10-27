@@ -25,7 +25,8 @@
 | --- | --- |
 | 说人话 | 把技术回答改成非程序员也看得懂的话 |
 | 换语言 | 忠实翻译成 `{language}` |
-| 加结构 / 加图示 | 一句结论 + 要点列表 + 一张 mermaid 流程图 |
+| 加结构 / 加图示 | 一句结论 + 要点列表 + 一张 mermaid 流程图或时序图 |
+| 换产物 | 把总结改成 commit message、TODO 清单、给老板的进展汇报 |
 | 换语气 | 像给初学者讲一样，温和、带个生活类比 |
 
 > 关于「加图」：插件只是把第二个模型的输出原样存下来。模型能写出 mermaid 代码块或 Markdown 图片链接，但**能不能画出来取决于显示的地方**（GitHub 会渲染 mermaid；「翻译记录」页是否渲染 mermaid / 外链图片请以实际为准）。插件不会自己生成图片。
@@ -39,77 +40,258 @@
 
 ## 真实例子
 
-以下 4 个例子是 2026-10-27 在真实 magpie（DF03 机器）上跑出来的：请求通过本机网关 `127.0.0.1:3425` 发给 `codex/gpt-6.1-sol`，插件按规则 `gpt-*` 交给 **`traex/gemini-3-flash`** 转述，原文和转述取自插件的 `log.jsonl`。只做了截断（标 `…`），没有改字。
+下面的例子全部是 2026-10-27（太平洋时间上午 11:10–11:29）在一台真实的 magpie 上跑出来的（当时装的是本插件 0.1.0 版，转述由后台 worker 完成；之后的版本改成在 `onResponse` 里转述，提示词和代码遮挡的规则不变）。
 
-### 例 1：说人话（技术回答 → 通俗中文）
+- **工作模型**：`codex/gpt-6.1-sol`。请求经本机网关 `127.0.0.1:3425` 发出，插件不改它的回复。
+- **转述模型**：`cursor/gemini-3.8-flash`，通过规则 `{"model":"gpt-*","translator":"cursor/gemini-3.8-flash"}` 匹配。每个例子临时换一条全局 `prompt`，跑完后恢复原配置。
+- **原文和转述的来源**：插件的 `log.jsonl`，行号标在每个例子上。「转述耗时」取自插件记录（`history.json` 的 `ms`），「工作耗时」是从发出请求到收到回复的时间。
+- **只截断不改字**：截掉的地方标了 `…`，引用块里的换行可能被合并。
 
-提示词：`Rewrite the user's text into plain, easy-to-read {language} that a non-programmer can follow. Keep code unchanged.`
+**目录**
 
-原文（GPT，节选）：
-> A database index is an auxiliary data structure, typically a B-tree or hash table, that maps indexed column values to row locations. It speeds up reads by letting the query optimizer use an index scan or seek instead of a full table scan. …
+1. [解释开源代码（附同模型自我改写对照）](#1-解释开源代码)
+2. [长代码审查 → 按优先级的清单](#2-长代码审查--按优先级的清单)
+3. [Agent 的长计划 → TODO 清单](#3-agent-的长计划--todo-清单)
+4. [干完活的总结 → commit message / 给老板的进展](#4-干完活的总结--commit-message--给老板的进展)
+5. [满是术语的技术建议 → 给 PM 的人话](#5-满是术语的技术建议--给-pm-的人话)
+6. [一段文字 → 时序图](#6-一段文字--时序图)
+7. [同一份回复，换两种口吻](#7-同一份回复换两种口吻)
+8. [换语言、换形式：日语 / 推文串 / 苏格拉底式提问](#8-换语言换形式)
+9. [效果不好的例子（如实列出）](#9-效果不好的例子)
 
-转述（Gemini，节选）：
-> 数据库索引就像是书的目录，通常采用 B-tree 或哈希表结构，将数据的值对应到它在表中的具体位置。它能让数据库在查询时直接跳到目标位置，而不需要扫描整张表，从而显著提高读取速度。…
->
-> 然而，索引会使写入速度变慢。因为每当你执行 INSERT、UPDATE 和 DELETE 操作时，数据库都必须同步维护所有相关的索引。…
+### 1. 解释开源代码
 
-### 例 2：翻译（英文 → 中文，代码不动）
+让 GPT 解释一段真实的开源代码，要求「精确、技术化、简洁但密集」。然后用同一条提示词，分别交给 **Gemini**（走插件）和 **GPT 自己**（对照组）转述。对照组的做法是：在 DF03 上直接调用插件自己的 `maskCode` 和 `translateJob`，提示词、遮挡代码的方式都和插件完全相同，只是把转述模型换成了 `codex/gpt-6.1-sol`。
 
-提示词：`Translate the user's text into {language} faithfully. Keep the original structure and code.`
-
-原文（节选）：
-> `git rebase -i HEAD~3` starts an **interactive rebase** of the last three commits on your current branch. It lets you reorder, combine, edit, or remove those commits. …
->
-> Change the second `pick` to `squash` to combine C with B. Save and close; Git prompts you to edit the combined commit message, then replays D.
-
-转述（节选）：
-> `git rebase -i HEAD~3` 会启动当前分支最后三个提交的**交互式变基**。它允许你对这些提交进行重新排序、合并、编辑或删除。…
->
-> 将第二个 `pick` 改为 `squash`，以将 C 合并到 B 中。保存并关闭；Git 会提示你编辑合并后的提交信息，然后重新应用 D。
-
-### 例 3：加结构 + mermaid 图
-
-提示词：``Summarize the user's text in {language} as: a one-line conclusion, a bullet list of key points, then a ```mermaid flowchart``` diagram of the process.``
-
-原文（节选）：
-> When you type an HTTPS URL into your browser, several steps happen:
-> 1. **Find the server.** The browser checks its cache or uses DNS … 2. **Establish a secure connection.** … 5. **Display the page.** …
-
-转述（完整，未截断）：
-
-访问 HTTPS 网站的过程是从域名解析开始，通过建立安全加密连接来请求和接收数据，最终由浏览器渲染出网页的完整流程。
-
-*   **查找服务器**：浏览器通过缓存或 DNS 系统将域名转换为 IP 地址。
-*   **建立安全连接**：通过 TCP 连接和 TLS 握手验证服务器身份并加密通信（HTTP/3 则使用集成的 QUIC 协议）。
-*   **发送请求**：在加密通道中发送包含路径、请求头和 Cookie 的 HTTP 请求。
-*   **接收响应**：服务器处理请求并返回包含状态码、响应头和 HTML 内容的数据。
-*   **显示页面**：浏览器解析 HTML，获取 CSS、JS 等资源，计算布局并完成页面渲染。
-
-```mermaid
-graph TD
-    A[输入 URL] --> B[DNS 解析获取 IP 地址]
-    B --> C[建立 TCP/TLS 加密连接]
-    C --> D[发送 HTTP 请求]
-    D --> E[接收 HTTP 响应]
-    E --> F[解析 HTML 并加载资源]
-    F --> G[浏览器渲染页面]
+提示词：
+```text
+Explain the user's text in {language} to a developer who has never seen this codebase: start with one everyday analogy, then explain step by step in plain words what the code does and why, then a ```mermaid flowchart``` of the control flow. Keep code identifiers and code unchanged.
 ```
 
-### 例 4：换语气（讲给初学者听）
+| 代码 | 工作耗时 | Gemini 转述 | GPT 自我改写 | log.jsonl |
+| --- | --- | --- | --- | --- |
+| Redis [`dictRehash`](https://github.com/redis/redis/blob/33c2a2a145d3f09b42503df27d3ffbc76f34e32c/src/dict.c#L406-L437) | 32.6 s | 35.7 s | 35.9 s | 第 47 行 |
+| CPython [`_lru_cache_wrapper`（有上限的分支）](https://github.com/python/cpython/blob/d54c2d89b7a6b75bab996eacca22b85816f56762/Lib/functools.py#L653-L721) | 28.2 s | 45.3 s | 41.9 s | 第 48 行 |
+| pillarjs/router（Express 的路由层）[`Layer.prototype.match`](https://github.com/pillarjs/router/blob/098ea782ee6dadbedda778470a177ccd813c95a0/lib/layer.js#L265-L298) | 24.2 s | 49.8 s | 26.6 s | 第 49 行 |
 
-提示词：`Retell the user's text in {language} for a complete beginner, in a warm, encouraging tone, using one everyday analogy. Keep code unchanged.`
+**以 Redis 为例**
+
+GPT 原文（节选）：
+> `dictRehash(d, n)` advances an **already-started incremental migration** from the old hash table (`ht_table[0]`) to the replacement (`ht_table[1]`). It normally migrates at most `n` **nonempty buckets**, with an additional budget for scanning empty buckets. It does not initiate resizing. …
+> - `rehashidx` is the next old-table bucket to examine. Every old-table bucket strictly below it is empty. …
+
+Gemini 转述（节选）：
+> ### 生活化比喻
+> 可以把整个过程想象成**仓库搬家**：假设旧仓库（`ht_table[0]`）空间不够或者过大，需要整体搬到新仓库（`ht_table[1]`）。如果一次性把成千上万件货物全搬过去，整个公司的业务就必须暂停（造成系统卡顿）。因此，系统选择在正常营业的同时进行“蚂蚁搬家”：每次搬家工人（`dictRehash(d, n)`）只过来搬迁至多 `n` 个**装有货物的货架（非空桶）**，同时给他们规定一个“走访空货架的体力上限（空桶扫描预算）”，体力耗尽或搬满额度就停下。…
+> 2. **跳过空桶**：推进 `rehashidx` 寻找有货的桶。每次跳过空桶消耗 1 点 `empty_visits = 10*n` 预算。…
+>    * *为什么需要预算*：旧表可能非常稀疏，如果一直扫描连续的成千上万个空桶，依然会造成 CPU 峰值阻塞。
+
+GPT 自我改写（节选）：
+> 这就像一家仓库已经开始搬货：旧仓库和新仓库同时在用，每次只搬几个有货的货架，寻找有货货架时也有步数限制。这个函数负责继续搬运，不负责决定何时开始搬家；即使这次没有搬货，也不能仅凭返回值判断搬家是否已经结束。…
+
+GPT 自我改写画的流程图（原样）：
+
+```mermaid
+flowchart TD
+    A["进入函数，读取一次全局策略"] --> B{"策略要求立即跳过？"}
+    B -- 是 --> R0["返回表示完成、未启动或策略暂缓的值"]
+    B -- 否 --> C{"当前正在迁移？"}
+    C -- 否 --> R0
+    C -- 是 --> D{"策略是否因大小变化不足而暂缓？"}
+    D -- 是 --> R0
+    D -- 否 --> E{"还有非空桶迁移额度，且旧表仍有条目？"}
+
+    E -- 是 --> F["断言当前旧桶索引有效"]
+    F --> G{"当前桶为空？"}
+    G -- 是 --> H["推进到下一桶，扣减空桶扫描预算"]
+    H --> I{"扫描预算已耗尽？"}
+    I -- 是 --> R1["返回表示迁移尚未完成的值"]
+    I -- 否 --> G
+
+    G -- 否 --> J["迁移当前桶的所有条目，更新两表计数"]
+    J --> K["推进旧桶索引，消耗一个非空桶迁移额度"]
+    K --> E
+
+    E -- 否 --> L{"旧表是否为空？"}
+    L -- 否 --> R1
+    L -- 是 --> M["释放旧桶数组，将新表提升为主表，重置备用表并结束迁移"]
+    M --> R0
+```
+
+**结论（如实）**：两个转述都比原文好懂得多。但这一组里，**GPT 自我改写并不比 Gemini 差，甚至更稳**：
+
+- **Gemini 的长处**：比喻更具体，每一步都多讲了一句「为什么」，读起来更像教程。
+- **Gemini 的问题**：三张流程图都把带反引号的代码（比如 `` `ht_used[0]` ``）直接写进了节点文字，有一张还塞进了整段代码块，这些图在 GitHub 上很可能画不出来，所以这里没有把它们当作 mermaid 渲染。
+- **GPT 自我改写的长处**：三张图的节点文字都加了引号、没有夹带代码，可以正常渲染。三段都和原文一样准确。
+- **耗时**：两边差不多，router 那段 GPT 更快（26.6 s，Gemini 49.8 s）。
+
+所以，换一个模型来转述，价值主要在**风格和成本**（比如用便宜、快的模型，或者口吻更适合你的模型），而不是「别的模型一定写得更好」。三段代码的完整输出都在 `log.jsonl` 第 47–49 行。
+
+### 2. 长代码审查 → 按优先级的清单
+
+原文是 GPT 对一个 8 行 Go handler 写的整段散文式审查。提示词：`Turn the user's code review into a prioritized checklist in {language}: group items under 🔴 must fix / 🟡 should fix / 🟢 nice to have, one line each with file/function name. Drop pleasantries. Keep code unchanged.`
+耗时：工作 38.7 s，转述 105.2 s。来源：`log.jsonl` 第 51 行。
 
 原文（节选）：
-> A **race condition** occurs when a program's result depends on the unpredictable timing of concurrent operations. For example, two threads may read the same counter value, both add one, and then both write the same result. One increment gets lost. …
+> The handler has several serious issues: the SQL query is injectable, database errors can cause a panic, the cache may be unsafe under concurrent requests, and the response may expose sensitive user data. … The most urgent security problem is concatenating `id` into the SQL statement. An attacker can supply an expression such as `0 OR 1=1` …
 
 转述（节选）：
-> 嘿！别担心，编程中的一些概念听起来很高级，但其实和我们的日常生活很像。
+> 🔴 must fix
+> - handler: 修复 SQL 注入漏洞，禁止拼接 `id`（防范如 `0 OR 1=1` 的注入），改用驱动要求的参数化查询（如 `WHERE id = ?` 或 `WHERE id = $1`）并严格校验 ID 的类型与取值范围。
+> - handler: 增加授权校验逻辑，确认调用方是否有权读取目标用户，防止通过篡改 `id` 参数发生越权访问（IDOR）。
+> - handler: 防止密码哈希泄露，检查 `User` 中导出的 `PasswordHash` 字段是否会被 `encoding/json` 序列化，通过添加 `json:"-"` 标签或定义专用响应类型过滤敏感字段。
+> - handler: 修复数据库错误处理，检查 `db.Query` 返回的错误，避免因 `rows` 为 nil 导致调用 `rows.Next()` 时发生 panic。
 >
-> 想象一下你和好朋友正在一起往存钱罐里存钱。存钱罐旁边有一张小纸条记录着总金额，现在写着“10元”。…
+> 🟡 should fix … （5 条）
 >
-> 为了不让辛苦存的钱变没，我们可以给纸条加一把“魔法锁”，也就是 `threading.Lock`。…
+> 🟢 nice to have
+> - handler: 将 SQL 查询中的 `SELECT *` 替换为显式列名列表，避免表结构变更破坏扫描顺序或列数量。…
 
-（这次实测里，Python 代码块被原样保留，但模型把它放进了一句话中间：「这种情况就像 ```python … ``` 展示的一样」。代码本身没改，只是位置受模型和提示词影响。）
+### 3. Agent 的长计划 → TODO 清单
+
+原文是 GPT 用散文写的「给 Express API 加限流」的计划（约 200 词，要求不分点）。提示词：``Turn the user's text into a TODO checklist in {language}: markdown checkboxes `- [ ]`, ordered by execution, each item a concrete action under 15 words, grouped by phase. Nothing else.``
+耗时：工作 10.6 s，转述 15.9 s。来源：`log.jsonl` 第 54 行。
+
+原文（节选）：
+> I’ll use a token bucket algorithm, which allows short bursts while enforcing a sustained request rate. Redis will store each bucket’s token count and last refill timestamp, with expiration to remove inactive buckets. An atomic Lua script will refill tokens, check capacity, and consume a token in one operation …
+
+转述（节选）：
+> ### 阶段一：核心算法与 Redis 基础
+> - [ ] 编写原子 Lua 脚本处理令牌补充、检查与消耗
+> - [ ] 在 Redis 中存储令牌计数与时间戳并配置过期时间
+>
+> ### 阶段二：中间件与配置开发
+> - [ ] 配置 Express 代理信任以获取规范化客户端 IP
+> - [ ] 定义通用默认值及敏感端点的限流路由配置
+> - [ ] 实现位于认证后、处理函数前的 Express 中间件
+> …
+> ### 阶段五：灰度发布与监控
+> - [ ] 实现包含禁用、仅观察、强制执行的特性开关
+> - [ ] 开启仅观察模式并评估潜在拦截量与 Redis 延迟
+> - [ ] 按路由逐步开启强制拦截并监控拒绝率、错误与延迟
+> - [ ] 验证通过特性开关执行即时回滚的能力
+
+### 4. 干完活的总结 → commit message / 给老板的进展
+
+同一类原文（GPT 用散文总结刚做完的改动），换两种提示词，得到两种完全不同的产物。
+
+**4a. commit message**。提示词：`Turn the user's text into a git commit message in English: Conventional Commits subject line under 72 chars, blank line, bullet body, and a 'BREAKING CHANGE:' footer if anything was removed. Output only the message.`
+耗时：工作 8.4 s，转述 16.4 s。来源：`log.jsonl` 第 56 行。
+
+原文（节选）：
+> I fixed a race condition in the session cache by adding a mutex in `session/store.go`, ensuring concurrent access to shared cache state is synchronized. … The work includes six new tests and removes the deprecated `/v1/login` endpoint. Removing that route is the main compatibility consid…
+
+转述（完整）：
+```text
+fix!: resolve session cache race condition and add payment retries
+
+* Add a mutex in `session/store.go` to synchronize concurrent access to shared cache state
+* Implement retry behavior with jitter in the payment client
+* Bump Go version to 1.23
+* Add six new tests
+* Remove deprecated `/v1/login` endpoint
+
+BREAKING CHANGE: The deprecated `/v1/login` endpoint has been removed. Consumers must migrate to a supported login endpoint. The project now requires Go 1.23.
+```
+
+**4b. 给非技术同事的进展汇报**。提示词：`Turn the user's text into a status update in {language} for non-technical stakeholders: 3 short sections 完成了什么 / 对用户的影响 / 需要注意的风险. No file names or jargon.`
+耗时：工作 9.7 s，转述 11.9 s。来源：`log.jsonl` 第 57 行。
+
+转述（节选）：
+> 对用户的影响
+> - 用户的登录和会话状态更加稳定，减少了偶发的系统异常。
+> - 支付流程更加顺畅，即便遇到短暂的网络抖动或临时故障，系统也能更平稳地在后台恢复，改善支付体验。
+>
+> 需要注意的风险
+> - 旧版 `/v1/login` 渠道现已彻底停用。如果仍有外部合作方或客户端依赖该渠道，将会访问失败，需尽快迁移至正在支持的正式认证渠道。
+
+（小瑕疵：提示词要求不写文件名，但 `session/store.go` 是代码占位符，插件按规则原样放了回去。）
+
+### 5. 满是术语的技术建议 → 给 PM 的人话
+
+问题是「现在该不该从单体 + Postgres 迁到微服务 + Kafka」，并要求 GPT 用满是术语的英文回答。提示词：`Rewrite the user's text in {language} for a product manager with no engineering background: no jargon (explain any unavoidable term in brackets), focus on user impact, risk, and cost/time. Max 150 words.`
+耗时：工作 15.3 s，转述 19.8 s。来源：`log.jsonl` 第 53 行。
+
+原文（节选）：
+> **I wouldn’t green-light the migration without evidence that deployment coupling, scaling asymmetry, or ownership contention is materially constraining delivery.** … CAP becomes relevant during network partitions … Kafka’s replication, ISR, and producer acknowledgment configuration influence durability and availability … We would introduce eventual consistency, consumer lag, idempotent handlers, transactional outboxes …
+
+转述（完整）：
+> 我不建议此时拆分系统。现有架构稳定可靠，盲目重构不会直接提升性能，反而带来巨大风险：
+>
+> 1. **体验与风险**：易出现数据同步延迟（如用户提交后页面未即时更新），且系统链路变复杂后故障排查更慢，影响可用性。
+> 2. **成本与周期**：开发与运维成本成倍增加，会长期挤占团队精力，严重拖慢新业务功能的交付进度。
+>
+> **建议**：优先优化现有系统。只有在明确出现影响业务的瓶颈时，再单独挑选一个独立模块拆分试水。
+
+### 6. 一段文字 → 时序图
+
+原文是 GPT 用约 180 词的密集散文讲 OAuth 2.0 授权码 + PKCE 流程。提示词：``In {language}: one-sentence summary, then a ```mermaid sequenceDiagram``` with participants SPA, AuthServer, API showing every message in the user's text in order.``
+耗时：工作 8.6 s，转述 26.8 s。来源：`log.jsonl` 第 59 行。
+
+转述的图（原样）：
+
+```mermaid
+sequenceDiagram
+    participant SPA
+    participant AuthServer
+    participant API
+    SPA->>AuthServer: 重定向至授权端点（客户端 ID、重定向 URI、作用域、`code_challenge`、`code_challenge_method=S256`、`state`）
+    AuthServer-->>SPA: 重定向返回短期授权码及原始 `state`
+    SPA->>AuthServer: POST 令牌端点（授权码、重定向 URI、客户端 ID、`code_verifier`）
+    AuthServer-->>SPA: 验证通过后颁发访问令牌及（可选）刷新令牌
+    SPA->>API: 发送携带访问令牌（Bearer 凭证）的请求
+    API-->>SPA: 验证令牌并执行授权响应
+    SPA->>AuthServer: 发送刷新令牌换取新令牌
+    AuthServer-->>SPA: 颁发新令牌（支持轮换或发送者约束）
+```
+
+（另一次试验是把电商结账架构画成 flowchart，`log.jsonl` 第 52 行。内容是对的，但节点文字 `[external payment service provider (PSP)]` 里有括号，mermaid 可能解析失败，所以没有放在这里。）
+
+### 7. 同一份回复，换两种口吻
+
+同一份 GPT 原文（讲 JavaScript 闭包和 `var` 循环为什么打印 3,3,3），转述了两次：
+
+- **资深工程师模式**：走插件。耗时：工作 7.6 s，转述 14.0 s。来源：`log.jsonl` 第 62 行。
+- **导师模式**：对同一份原文，在 DF03 上直接调用插件自己的 `translateJob` 生成，转述模型也是 `cursor/gemini-3.8-flash`，耗时 22.3 s。没有写进 log.jsonl，原始输出保存在 `mt_ex4.json` 里。
+
+**资深工程师**。提示词：`Rewrite the user's text in {language} as a terse senior engineer: at most 3 lines, no pleasantries. Keep code unchanged.`
+
+> JS 闭包捕获变量绑定而非值快照：（代码块）`var` 共享同一个 `i` 绑定，同步累加 `i` 至 `3` 后，异步回调读取的均为终值 `3`。
+> 改用 `let` 修复：（代码块），`for` 加 `let` 在每轮迭代生成独立绑定，分别输出 `0`、`1`、`2`。
+
+（这里用「（代码块）」代替了原文里两段被放回句子中间的代码块，代码本身没有改。）
+
+**导师**。提示词：`Rewrite the user's text in {language} as a patient mentor for a junior developer: warm tone, one analogy, then the explanation step by step, end with one small exercise. Keep code unchanged.`
+
+> 别担心，闭包（Closure）是很多初学者都会感到困惑的概念，我们一步一步来理解它。
+>
+> 简单来说，闭包就是一个函数以及它所绑定的词法环境。你可以把闭包想象成**一张藏宝图的“指针”而不是一张静态的“藏宝现场照片”**：闭包记住的是变量的**绑定关系** … 拿到的一定是那个变量**此时此刻最新的值**。
+> …
+> **小练习**：如果不使用 `let`（依然保留 `var`），你能尝试通过一个立即执行函数（IIFE）给每次循环制造一个独立的作用域，从而同样打印出 `0`、`1`、`2` 吗？试着在编辑器里写写看吧！
+
+### 8. 换语言、换形式
+
+- **日语**（给日本同事）。提示词：`Translate the user's text into natural Japanese for a Japanese teammate. Keep code unchanged.` 耗时：工作 8.9 s，转述 16.7 s。来源：`log.jsonl` 第 60 行。
+  > JavaScriptのクロージャとは、関数と、それが作成されたレキシカル環境への参照がセットになったものです。… 値を自動的にスナップショットとして保持するわけでは**ありません**。
+
+  两段代码块都原样保留，而且留在各自的段落里。
+- **推文串**。提示词：`Turn the user's text into a 3-post X/Twitter thread in {language}, each post under 140 characters, numbered 1/3 2/3 3/3, engaging but accurate.` 耗时：转述 27.0 s。来源：`log.jsonl` 第 58 行。
+  > 1/3 在 OAuth 2.0 PKCE 流程中，SPA 会生成随机 `code_verifier`，并经 SHA-256 与 base64url 计算出 `code_challenge`。…
+  > 3/3 … 结合刷新令牌轮换（Rotation）或发送者约束（Sender-constraining），能有效化解重放风险，兼顾便捷与安全！
+
+  （字数分别是 190、156、138，前两条超过了 140 字的要求。）
+- **苏格拉底式提问**。提示词：`Turn the user's text into a Socratic tutoring sequence in {language}: 4 numbered questions … each followed by a short hint in parentheses. Do not state the final answer directly. Keep code unchanged.` 耗时：转述 36.9 s。来源：`log.jsonl` 第 61 行。
+  > 2. 回调函数通常是异步执行的，当同步循环终止、变量 `i` 递增到 `3` 且不再满足条件 `i < 3` 时，这些回调函数开始运行了吗？（提示：考虑 JavaScript 事件循环中同步代码执行与异步回调触发的先后顺序。）
+
+  问题本身问得不错，但第 3 题几乎把答案说出来了，代码块也被放进了句子中间。
+
+### 9. 效果不好的例子
+
+如实列出，这些也都是真实运行的结果：
+
+- **「危险命令审查」失败**（`log.jsonl` 第 55 行）。原文里的 `rm -rf`、`DROP DATABASE`、`docker system prune -af` 都在代码块里，插件为了保护代码，会先把代码块换成占位符再送给转述模型，所以 Gemini **根本看不到这些命令**。它只列出了两条行内命令（`df -h`、`sudo docker system df`），结论却是「是否建议直接执行：是」。那些没被引用到的代码块，按规则被原样附在了末尾。**结论：代码一律遮住，这是设计上的取舍，因此插件不适合做「审查命令」这类需要读代码的提示词。**
+- **崩溃排查 → 一句话 + 下一步**（`log.jsonl` 第 50 行，转述 98.5 s）。内容是对的，但「一句话」写成了一个塞进好几个代码块的超长句子，下一步里也夹着整段代码。GPT 自我改写对照组（29.9 s）也有同样的问题。这一项转述没有帮上忙。
+- **代码块被放进句子中间**是这次反复出现的现象（例 7、例 8、崩溃排查）：代码本身一字没改，只是被模型放到了不合适的位置。
 
 ## 界面预览
 
