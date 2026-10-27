@@ -1,0 +1,42 @@
+{
+  "name": "magpie-plain-zh",
+  "version": "0.1.0",
+  "description": "magpie 旁路转述插件：用已配置的任意模型把选定工作模型的最终回复转述出来，译文不进入原模型的会话",
+  "type": "module",
+  "bin": {
+    "magpie-plain-zh": "./src/panel.mjs"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "docs/DESIGN.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test --test-reporter=spec",
+    "start": "node src/panel.mjs",
+    "demo": "node script/demo.mjs",
+    "e2e": "node script/e2e-magpie.mjs"
+  },
+  "keywords": [
+    "magpie",
+    "magpie-hooks",
+    "translation"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "magpie": {
+    "hooks": "./src/hooks.mjs",
+    "options": {
+      "gatewayTimeoutMs": 2000,
+      "panelPort": 44721,
+      "language": "简体中文",
+      "prompt": "",
+      "style": "",
+      "display": ["panel", "log"],
+      "rules": []
+    }
+  }
+}
