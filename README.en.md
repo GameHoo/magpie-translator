@@ -19,7 +19,7 @@ Translation is one use case. Change the prompt to get plain language, a differen
 
 ## Prompt settings (as implemented)
 
-- **Global `prompt`** replaces the default task sentence. Placeholders: `{language}`, `{style}`, `{model}` (work model), `{translator}` (rewrite model). Empty means the default: rewrite into plain, easy-to-read `{language}` without adding or dropping information.
+- **Global `prompt`** replaces the default task sentence. Placeholders: `{language}`, `{style}`, `{model}` (work model), `{translator}` (rewrite model). The settings box shows this sentence, and leaving it unchanged saves empty: `Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary.`
 - **`style`** is appended after the prompt. The panel has four presets (plain words, keep terms, brief, full) or free text.
 - **Per-rule overrides**: each rule can set its own `language`, `prompt`, `style`, `display`, `webhookUrl`.
 - Always kept regardless of prompt: an internal loop-guard marker, the keep-placeholders rule, and "Output only the rewritten text."
@@ -98,7 +98,7 @@ Translator ids come from `magpie models`; the ones above are examples. Rules are
 | Timeout | `translateTimeoutMs` | 120 s (10–120 s in the panel; up to 600 s via CLI) |
 | History kept | `historyLimit` | 500 (100, 500, 1000, 5000, or 0 = don't keep) |
 | Rules: source → translator, with optional per-rule language and prompt | `rules` | `[]` |
-| Prompt, with `{language}` `{style}` `{model}` `{translator}` and reset | `prompt` | empty, which uses the built-in English task sentence |
+| Prompt, with `{language}` `{style}` `{model}` `{translator}` and reset | `prompt` | the box shows the built-in English task sentence; leaving it unchanged saves empty and uses that same sentence |
 
 These fields can only be set from the CLI: `display` (`log` by default; also `file`, `panel`, `stdout`, `notify`, `webhook`), `webhookUrl`, `localPanel`, `panelPort`, `gatewayKey`, `magpieBaseUrl`.
 
@@ -112,7 +112,7 @@ These fields can only be set from the CLI: `display` (`log` by default; also `fi
 
 ## How it works
 
-The `onRequest` and `onResponse` hooks (`src/hooks.mjs`, run by magpie's Bun) plus an `onEvent` middleware (`src/middleware.mjs`) capture the final reply after the turn ends. They mask the code and drop a job in a local inbox. A background worker calls your local magpie (`/v1/chat/completions`) with the translator model and writes `history.json`. Magpie runs plugin pages in a sandboxed iframe with no `fetch`, so the worker publishes `ui/feed.js` and `ui/catalog.js` for the page and panel to load. Saving settings, compare, and retry go through `magpie.options.set`.
+Translation runs in `onResponse` (`src/hooks.mjs`, run by magpie's Bun). `onRequest` does not change the request: it marks the plugin's own translation calls and accepts compare or retry jobs. `magpie plugin list` still prints its fixed label `async gateway hook onRequest` for every async hook. An `onEvent` middleware (`src/middleware.mjs`) fills in a Responses `completed` event when the body was only in the deltas. The hooks mask the code and drop a job in a local inbox. A background worker calls your local magpie (`/v1/chat/completions`) with the translator model and writes `history.json`. Its `panel.pid` stores the pid, plugin version, source hash, and install path, and the worker restarts when that identity changes, so an update does not keep serving the old directory. On startup it backfills the Translations feed from `log.jsonl` when those rows are not already in `history.json`. `magpie plugin off` makes the worker exit once it is idle. Magpie runs plugin pages in a sandboxed iframe with no `fetch`, so the worker publishes `ui/feed.js` and `ui/catalog.js` for the page and panel to load. Saving settings, compare, and retry go through `magpie.options.set`.
 
 ## Privacy
 

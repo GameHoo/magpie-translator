@@ -32,7 +32,7 @@
 
 ## 提示词怎么配（以代码为准）
 
-- **全局提示词** `prompt`：替换默认任务句。可用变量 `{language}`、`{style}`、`{model}`（原始模型）、`{translator}`（转述模型）。留空时用默认句：把文本改写成通俗易读的 `{language}`，不增删信息。
+- **全局提示词** `prompt`：替换默认任务句。可用变量 `{language}`、`{style}`、`{model}`（原始模型）、`{translator}`（转述模型）。设置页里没改过时显示的就是这句，不改它保存成空值，翻译时把 `{language}` 换成语言名：`Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary.`
 - **风格** `style`：追加在提示词后面的一段要求。面板有四个预设：直白人话、保留术语、简洁、详细；也可以自己写。
 - **每条规则单独覆盖**：规则里可以写自己的 `language`、`prompt`、`style`、`display`、`webhookUrl`，比如 GPT 的回复用 A 提示词交给模型 X，其他模型用 B 提示词交给模型 Y。
 - 不管怎么改，插件都会保留：防回环的内部标记、「占位符原样保留」规则、「只输出改写后的内容」。
@@ -200,12 +200,12 @@ magpie plugin options magpie-translator '{
 | 超时 | `translateTimeoutMs` | 120 秒 | 面板上可选 10～120 秒，命令行最大可设 600 秒 |
 | 翻译记录保留 | `historyLimit` | 500 条 | 面板可选 100、500、1000、5000 条或「不保存」(`0`)，记录存在本机 |
 | 翻译规则 | `rules` | `[]` | 拖动或用箭头调整顺序。原始模型可以选具体模型、「所有模型」或「所有 provider/*」 |
-| 提示词 | `prompt` | 空 | 可以插入 `{language}`、`{style}`、`{model}`、`{translator}` 这几个变量，下方有实时预览。点「恢复默认」会还原 |
+| 提示词 | `prompt` | 空 | 编辑框里先显示上面那句英文默认任务句。不改它就保存成空值，翻译时用的还是这一句。可以插入 `{language}`、`{style}`、`{model}`、`{translator}`，下方有实时预览。点「恢复默认」会还原 |
 
-关于提示词：编辑框里先显示一份中文模板。如果不改它直接保存，存进配置的是空值，插件会用代码里的英文默认任务句：
+关于提示词：编辑框里显示的默认句和代码里的默认任务句是同一句。不改它直接保存时，配置里写的是空值，翻译时再把 `{language}` 换成语言名：
 
 ```text
-Rewrite the user's text into plain, easy-to-read <language>. Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary.
+Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary.
 ```
 
 不管提示词怎么改，插件都会保留三样东西：一个内部标记（用来防止翻译请求被再翻译一遍）、占位符规则，以及 `Output only the rewritten text.` 这句要求。
@@ -236,7 +236,8 @@ Rewrite the user's text into plain, easy-to-read <language>. Keep the meaning th
                                  └─► history.json → ui/feed.js → 「翻译记录」页
 ```
 
-- **hook**：`src/hooks.mjs` 导出 `onRequest` 和 `onResponse`，由 magpie 用 Bun 运行。`src/middleware.mjs` 导出 `onEvent`，在网关进程里运行。翻译等这一轮结束后才开始，不拖慢 agent。
+- **hook**：翻译在 `onResponse`。`onRequest` 不改请求，只认出插件自己的翻译请求，并接收对比和重试。两者都在 `src/hooks.mjs`，由 magpie 用 Bun 运行。`src/middleware.mjs` 导出 `onEvent`，在网关进程里运行。翻译等这一轮结束后才开始，不拖慢 agent。
+- **工人**：`node src/panel.mjs`。`panel.pid` 里写下进程号、插件版本、源码哈希和安装目录。更新之后对不上就停掉旧进程再起一个，这样 `ui/feed.js` 和 `ui/catalog.js` 会写进新目录。启动时把 `log.jsonl` 里还没有写进 `history.json` 的行补进翻译记录。`magpie plugin off` 之后工人看到 `plugins.json` 里这条是关的，手头的任务做完就退出。
 - **页面和面板在沙箱里**：magpie 把插件页面放进 `sandbox allow-scripts` 的 iframe，不允许 `fetch`、WebSocket 和内联脚本。所以 worker 把模型目录写成 `ui/catalog.js`，把最近的记录写成 `ui/feed.js`，页面用 `<script>` 加载。保存设置、对比和重试走的是 magpie 提供的 `magpie.options.set`。插件只申请了 `providers:list` 和 `usage:summary` 两项只读权限。
 - **出错不影响原流程**：插件出了任何问题，agent 照样拿到原文。
 
@@ -267,7 +268,7 @@ Rewrite the user's text into plain, easy-to-read <language>. Keep the meaning th
 这两个任务在下一次经过 magpie 的请求时才会开始（页面会提示「已提交，钩子重载后开始」）。如果 worker 没在运行，就要等下一轮对话。
 
 **`magpie plugin list` 显示 `async gateway hook onRequest`？**
-这是 magpie 自己的标签，属于正常现象。插件同时也导出了 `onResponse`。
+这行字是 magpie 对所有异步 hook 写死的，它不读取插件导出的函数名。翻译在 `onResponse`：抽出最终正文，屏蔽代码，放进收件箱。`onRequest` 不改请求体，只认出插件自己发出的翻译请求，并收下对比和重试。
 
 **Codex 用 ChatGPT 账号登录时抓不到正文？**
 这条路径不经过 middleware。如果它的 `response.completed` 不带正文，插件就看不到这一轮。详见 [docs/DESIGN.md](docs/DESIGN.md)。
