@@ -55,10 +55,11 @@
       "h.src": "原文", "h.dst": "译文", "h.compare": "用其他模型对比…", "h.copyDst": "复制译文", "h.copySrc": "复制原文",
       "h.retranslate": "重新翻译", "h.kept": "原样保留", "h.changed": "译文改了代码", "h.empty": "没有匹配的记录",
       "h.emptySub": "换个关键词，或清除筛选条件。", "h.clear": "清除筛选", "h.pick": "选择一条记录",
-      "h.pickSub": "左侧选一条，原文和译文会并排显示。", "h.none": "还没有翻译记录", "h.noneSub": "新记录写在本机数据目录。这一页读不到那个目录，所以这里先是空的。",
+      "h.pickSub": "左侧选一条，原文和译文会并排显示。", "h.none": "还没有翻译记录", "h.noneSub": "命中规则的最终回复会出现在这里。",
+      "h.auth": "网关拒绝了翻译请求。本机回环一般不需要密钥。如果需要，到设置里填写网关密钥，它会存进数据目录的 gateway.key，不会留在 plugins.json。",
       "h.today": "今天", "h.yesterday": "昨天", "toast.copied": "已复制到剪贴板", "h.noOut": "没有译文", "h.retry": "重试",
       "h.retryWith": "换个模型重试…", "h.adjust": "调整超时", "h.better": "这个更好", "h.collapse": "收起列表",
-      "h.alignNote": "按段落对齐 · 同步滚动", "h.queued": "已写入本机数据目录，不需要再等下一条回复", "h.retried": "已写入本机数据目录，不需要再等下一条回复",
+      "h.alignNote": "按段落对齐 · 同步滚动", "h.queued": "已交给本机工人，做完后会出现在这里", "h.retried": "已交给本机工人，做完后会出现在这里",
       "h.noMagpie": "这一页要在 magpie 里打开，才能交给翻译模型", "h.rate": "成功率 {n}%", "h.lat": "中位延迟 {n} s", "h.latNone": "中位延迟 —",
       "h.count": "共 {n} 条", "h.countF": "{n} / {all} 条", "h.timeoutTitle": "翻译超时", "h.failTitle": "翻译失败",
       "h.skipTitle": "已跳过", "h.expand": "展开原文", "st.ok": "成功", "st.failed": "失败", "st.timeout": "超时", "st.skipped": "已跳过",
@@ -79,10 +80,11 @@
       "h.src": "Original", "h.dst": "Translation", "h.compare": "Compare with…", "h.copyDst": "Copy translation", "h.copySrc": "Copy original",
       "h.retranslate": "Retranslate", "h.kept": "kept as is", "h.changed": "code was changed", "h.empty": "No matching entries",
       "h.emptySub": "Try another keyword or clear filters.", "h.clear": "Clear filters", "h.pick": "Pick an entry",
-      "h.pickSub": "Original and translation show side by side.", "h.none": "No translations yet", "h.noneSub": "New rows are in the local data directory. This page cannot read that directory, so the list stays empty.",
+      "h.pickSub": "Original and translation show side by side.", "h.none": "No translations yet", "h.noneSub": "Final replies that match a rule show up here.",
+      "h.auth": "The gateway refused the rewrite. Loopback usually needs no key. If it does, set one in Settings. It is stored as gateway.key in the data directory and removed from plugins.json.",
       "h.today": "Today", "h.yesterday": "Yesterday", "toast.copied": "Copied", "h.noOut": "No translation", "h.retry": "Retry",
       "h.retryWith": "Retry with…", "h.adjust": "Adjust timeout", "h.better": "Better", "h.collapse": "Hide list",
-      "h.alignNote": "Paragraph-aligned · synced scroll", "h.queued": "Queued in the local data directory. It does not wait for the next reply", "h.retried": "Retranslate queued in the local data directory. It does not wait for the next reply",
+      "h.alignNote": "Paragraph-aligned · synced scroll", "h.queued": "Handed to the local worker. It shows up here when the rewrite finishes", "h.retried": "Handed to the local worker. It shows up here when the rewrite finishes",
       "h.noMagpie": "Open this page inside magpie to send it to a model", "h.rate": "{n}% succeeded", "h.lat": "median {n} s", "h.latNone": "median —",
       "h.count": "{n} total", "h.countF": "{n} / {all}", "h.timeoutTitle": "Timed out", "h.failTitle": "Translation failed",
       "h.skipTitle": "Skipped", "h.expand": "Show original", "st.ok": "OK", "st.failed": "Failed", "st.timeout": "Timed out", "st.skipped": "Skipped",
@@ -104,6 +106,8 @@
     "rules.fall": "Nothing is translated when no rule matches. Put “All models” last as a fallback.", "rules.add": "Add rule",
     "prompt.title": "Prompt", "prompt.sub": "Shared by all rules; a rule can override it under Advanced.", "prompt.reset": "Reset",
     "prompt.vars": "Insert variable", "prompt.preview": "PREVIEW", "save.discard": "Discard", "save.save": "Save",
+    "key.title": "Gateway", "key.sub": "Loopback is accepted without a key. Fill this in only when the gateway refuses the local call.",
+    "key.label": "Gateway key", "key.help": "After save, the worker writes it to gateway.key in the data directory (mode 0600) and deletes it from plugins.json. Leave this blank to keep the key already stored. Auth failures show on the Translations page.",
     "hist.title": "Translations", "hist.export": "Export", "hist.settings": "Rules", "hist.search": "Search original or translation",
   };
   let lang = (params.get("lang") || document.documentElement.lang || "zh").slice(0, 2) === "en" ? "en" : "zh";
@@ -497,7 +501,7 @@
       return out;
     }
     function collect() {
-      return {
+      const body = {
         enabled: $("#enabled").checked,
         language: $("#lang").value,
         style: styleForSave(),
@@ -510,6 +514,9 @@
         prompt: promptForSave(),
         rules: rules.map(ruleToOptions),
       };
+      const key = $("#gatewayKey")?.value.trim();
+      if (key) body.gatewayKey = key;
+      return body;
     }
     function snapshot() { return JSON.stringify(collect()); }
     function setDirty() {
@@ -639,6 +646,7 @@
       }
       $("#histLimit").value = limit;
       $("#prompt").value = saved.prompt ? saved.prompt : DEFAULT_PROMPT;
+      if ($("#gatewayKey")) $("#gatewayKey").value = "";
       rules = (Array.isArray(saved.rules) ? saved.rules : []).map(ruleFrom);
       renderRules();
       updatePreview();
@@ -661,7 +669,10 @@
       const result = await setOptions(next);
       if (result === true) {
         showJobError("");
-        saved = next;
+        if ($("#gatewayKey")) $("#gatewayKey").value = "";
+        const remembered = { ...next };
+        delete remembered.gatewayKey;
+        saved = remembered;
         styleTouched = false;
         timeoutTouched = false;
         cleanSnap = snapshot();
@@ -1160,9 +1171,20 @@
         delete state.pending[w.translator];
       }
     }
+    function isAuthFailure(text) {
+      return /HTTP\s*401|HTTP\s*403|unauthorized|invalid api key|认证失败/i.test(String(text || ""));
+    }
+    function paintAuth(rows) {
+      const el = $("#authError");
+      if (!el) return;
+      const bad = rows.some((row) => isAuthFailure(row?.error) || (Array.isArray(row?.comparisons) && row.comparisons.some((item) => isAuthFailure(item?.error))));
+      el.hidden = !bad;
+      el.textContent = bad ? T("h.auth") : "";
+    }
     async function refresh() {
       const opts = await readOptions();
       const rows = Array.isArray(opts?.feed?.entries) ? opts.feed.entries.slice() : [];
+      paintAuth(rows);
       if (params.get("demo") === "1" && !rows.length) rows.push(...demoRows());
       const key = JSON.stringify(rows);
       if (key === refresh.last) { noteWait(); return; }

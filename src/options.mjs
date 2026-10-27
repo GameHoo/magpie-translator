@@ -1,8 +1,12 @@
+import { createHash } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { writeGatewayKey } from "./auth.mjs"
 import { DEFAULT_DISPLAY, DEFAULT_LANGUAGE, parseDisplay, parseFlag, parseHistoryLimit, parseTimeout } from "./config.mjs"
+import { publicFeed, readHistory } from "./history.mjs"
+import { dataDir, writeAtomic } from "./paths.mjs"
 
 export const MAX_NOTE = 4000
 export const MAX_RULES = 40
@@ -373,6 +377,108 @@ export function saveSettings(input, env = process.env, locate = {}) {
   }
   const view = viewOptions(normalized.options)
   return { spec: entry.spec, file, changed, options: view, preserved: view.preserved }
+}
+
+export const FEED_DEBOUNCE_MS = 3000
+export const FEED_MIN_INTERVAL_MS = 15000
+
+const feedPending = new Map()
+
+function feedStatePath(env) {
+  return path.join(dataDir(env), "feed-state.json")
+}
+
+function readFeedState(env) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(feedStatePath(env), "utf8"))
+    return { hash: String(parsed?.hash || ""), at: Number(parsed?.at) || 0 }
+  } catch {
+    return { hash: "", at: 0 }
+  }
+}
+
+// 没有 plugins.json 不算卸掉。列表在、这条不在，才是卸掉。
+export function pluginPresence(env = process.env, locate = {}) {
+  try {
+    const { list, missing } = readPluginList(env)
+    if (missing) return "unlisted"
+    const entry = findPlugin(list, env, locate)
+    if (!entry) return "absent"
+    return entry.off === true ? "off" : "on"
+  } catch {
+    return "unlisted"
+  }
+}
+
+function feedHash(feed) {
+  return createHash("sha256").update(JSON.stringify(canonical(feed))).digest("hex")
+}
+
+// 把公开摘要写进 plugins.json 的 options.feed。内容相同就不碰文件，避免宿主重启。
+// 真有变化时先等摘要稳定，并且两次写入至少隔一段时间。密钥顺手搬出 plugins.json。
+export function syncHostSurface(env = process.env, opts = {}) {
+  const debounce = Number.isFinite(opts.debounceMs) ? opts.debounceMs : FEED_DEBOUNCE_MS
+  const interval = Number.isFinite(opts.minIntervalMs) ? opts.minIntervalMs : FEED_MIN_INTERVAL_MS
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now()
+  let loaded
+  try { loaded = readPluginList(env) } catch { return { wrote: false, reason: "read" } }
+  if (loaded.missing) return { wrote: false, reason: "missing" }
+  const entry = findPlugin(loaded.list, env, opts.locate || {})
+  if (!entry) return { wrote: false, reason: "absent" }
+  const options = entry.options && typeof entry.options === "object" && !Array.isArray(entry.options) ? entry.options : {}
+  entry.options = options
+
+  let keyMoved = false
+  const rawKey = typeof options.gatewayKey === "string" ? options.gatewayKey.trim() : ""
+  if (rawKey) {
+    writeGatewayKey(rawKey, env)
+    delete options.gatewayKey
+    keyMoved = true
+  }
+
+  const feed = publicFeed(readHistory(env))
+  const dir = dataDir(env)
+  const empty = !feed.entries.length
+  const same = sameJson(options.feed ?? null, feed)
+  const skipFeed = entry.off === true || same || (empty && options.feed == null)
+  if (skipFeed) {
+    if (same || empty) feedPending.delete(dir)
+    if (keyMoved) {
+      writeList(loaded.file, loaded.list)
+      return { wrote: true, reason: "key" }
+    }
+    if (entry.off === true) return { wrote: false, reason: "off" }
+    if (same) return { wrote: false, reason: "unchanged" }
+    return { wrote: false, reason: "empty" }
+  }
+
+  const hash = feedHash(feed)
+  let pending = feedPending.get(dir)
+  if (!pending || pending.hash !== hash) {
+    pending = { hash, since: now }
+    feedPending.set(dir, pending)
+  }
+  if (now - pending.since < debounce) {
+    if (keyMoved) {
+      writeList(loaded.file, loaded.list)
+      return { wrote: true, reason: "key" }
+    }
+    return { wrote: false, reason: "debounce" }
+  }
+  const state = readFeedState(env)
+  if (state.at && now - state.at < interval) {
+    if (keyMoved) {
+      writeList(loaded.file, loaded.list)
+      return { wrote: true, reason: "key" }
+    }
+    return { wrote: false, reason: "rate" }
+  }
+
+  options.feed = feed
+  writeList(loaded.file, loaded.list)
+  writeAtomic(feedStatePath(env), `${JSON.stringify({ hash, at: now })}\n`)
+  feedPending.delete(dir)
+  return { wrote: true, reason: "feed", bytes: JSON.stringify(feed).length }
 }
 
 export const DEFAULTS = { language: DEFAULT_LANGUAGE, display: [...DEFAULT_DISPLAY] }

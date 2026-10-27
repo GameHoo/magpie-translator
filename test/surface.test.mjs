@@ -55,6 +55,10 @@ test("页面、设置面板和 hook 接到插件清单，页面脚本都在外�
     assert.match(html, /payload\.js/)
     assert.match(html, /id="jobError"/)
   }
+  assert.match(fs.readFileSync(new URL("../page/settings.html", import.meta.url), "utf8"), /id="gatewayKey"/)
+  assert.match(fs.readFileSync(new URL("../page/index.html", import.meta.url), "utf8"), /id="authError"/)
+  assert.match(app, /h\.auth/)
+  assert.match(app, /isAuthFailure/)
   assert.equal(fs.existsSync(new URL("../src/middleware.mjs", import.meta.url)), false)
   assert.equal(fs.existsSync(new URL("../src/panel.mjs", import.meta.url)), false)
   assert.equal(fs.existsSync(new URL("../src/worker.mjs", import.meta.url)), true)

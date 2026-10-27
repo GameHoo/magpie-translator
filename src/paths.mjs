@@ -16,6 +16,14 @@ export function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
 }
 
+export function writeAtomic(file, text, mode = 0o600) {
+  ensureDir(path.dirname(file))
+  const tmp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
+  fs.writeFileSync(tmp, text, { mode })
+  fs.renameSync(tmp, file)
+  try { fs.chmodSync(file, mode) } catch { /* 新文件已经是这个模式 */ }
+}
+
 export function magpieBaseUrl(options = {}, env = process.env) {
   const fromOpt = typeof options.magpieBaseUrl === "string" ? options.magpieBaseUrl.trim() : ""
   if (fromOpt) return fromOpt.replace(/\/$/, "")

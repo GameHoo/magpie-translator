@@ -4,7 +4,7 @@
   "kind": "page",
   "community": true,
   "summary": {
-    "en": "A second model rewrites the final reply in the style of your prompt. The rewrite is queued outside the hook, because magpie stops a hook at 10 seconds. Nothing is written back into the session. The history page can show rows only after magpie can read the plugin data directory.",
-    "zh": "另一个模型按你的提示词转述最终回复。转述在 hook 外面排队，因为 magpie 把 hook 停在 10 秒。不会写回原会话。翻译记录页要等 magpie 能读插件数据目录，才能显示新记录。"
+    "en": "A second model rewrites the final reply in the style of your prompt. The rewrite runs outside the hook, because magpie stops a hook at 10 seconds. Nothing is written back into the session. The history page shows a short summary written into plugin options, which restarts the hook host, so this package is not in the registry.",
+    "zh": "另一个模型按你的提示词转述最终回复。转述在 hook 外面做，因为 magpie 把 hook 停在 10 秒。不会写回原会话。翻译记录页显示写进插件 options 的短摘要，这会重启 hook 宿主，所以这个包不在官方列表里。"
   }
 }

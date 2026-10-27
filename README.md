@@ -10,6 +10,8 @@
 
 Package name: `@magpie-community/page-translator`.
 
+This package is not in the official [magpie-community](https://github.com/magpie-community/plugins) registry. Magpie stops a hook at 10 seconds and has no plugin job API, and a page cannot read a plugin's data directory. The history page shows a short summary the worker writes into this plugin's options. That write happens only when the summary text changed, after the text has stayed the same for 3 seconds, and at most once every 15 seconds. Each real write restarts the magpie hook host. This standalone plugin accepts that restart. It stays in this repository until magpie can show plugin data, or finish a long job, without restarting the host.
+
 ## What it does
 
 A [magpie](https://github.com/yetone/magpie) plugin. After a reply finishes, the hook sends the final prose to a translator model you choose. The result shows on the **Translations** page in magpie's sidebar. It can also go to a log, a file, a desktop notification, or a webhook.
@@ -84,7 +86,7 @@ magpie plugin add github:GameHoo/magpie-translator
 magpie plugin list
 ```
 
-Once this package is in the community registry, the install name is `@magpie-community/page-translator`. If a command says `no plugin`, use the name `magpie plugin list` prints: a GitHub install is `github:GameHoo/magpie-translator`, a path install is that path.
+The install name from this repository is `github:GameHoo/magpie-translator`. `@magpie-community/page-translator` is the package name, and it is not in the community registry. If a command says `no plugin`, use the name `magpie plugin list` prints: a GitHub install is `github:GameHoo/magpie-translator`, a path install is that path.
 
 Open **Translator** in magpie's settings, add a rule (source model on the left, translator model on the right), and save. Or:
 
@@ -120,12 +122,15 @@ The panel writes the same `options` object as the CLI, in magpie's `plugins.json
 | History | `historyLimit` | 500 | 100, 500, 1000, 5000, or `0` to keep none |
 | Rules | `rules` | `[]` | Empty means do nothing |
 | Prompt | `prompt` | empty | Placeholders: `{language}` `{style}` `{model}` `{translator}` |
+| Gateway key | stored as `gateway.key` | empty | Loopback is accepted with no key. A value typed here is saved once, then the worker moves it to `gateway.key` in the data directory (mode 0600) and deletes it from `plugins.json`. Leave the box blank to keep the key already stored |
 
-CLI-only: `display` (`log`, `file`, `stdout`, `notify`, `webhook`; default `["log"]`), `webhookUrl`, `magpieBaseUrl`, `maskCode` (default off), `allowRemoteExport` (default off). There is no `gatewayKey` field. A key is read only from `MAGPIE_TRANSLATOR_GATEWAY_KEY`, and only then is `Authorization` sent. `notify` and `webhook` run only when you list them in `display`, and only for a request whose origin is `local`, unless `allowRemoteExport` is on. This package does not set `gatewayTimeoutMs`, so the hook keeps magpie's own short limit. The model call is not inside the hook.
+CLI-only: `display` (`log`, `file`, `stdout`, `notify`, `webhook`; default `["log"]`), `webhookUrl`, `magpieBaseUrl`, `maskCode` (default off), `allowRemoteExport` (default off). `notify` and `webhook` run only when you list them in `display`, and only for a request whose origin is `local`, unless `allowRemoteExport` is on. This package does not set `gatewayTimeoutMs`, so the hook keeps magpie's own short limit. The model call is not inside the hook. The worker sends `Authorization` only when `gateway.key` exists. `MAGPIE_TRANSLATOR_GATEWAY_KEY` is read only when that file is absent.
 
 ## History page
 
 Sidebar → **Translations** (`翻译记录`).
+
+The list is the `feed` object in this plugin's options. The worker publishes it after a rewrite. A new row shows up once that summary is written. An empty list means no matching reply has been rewritten yet.
 
 - Success rate and median latency, search, and filters for agent, source model, translator, and status.
 - Side-by-side original and rewrite, copy either side, and a note when code moved or text was clipped.
@@ -133,8 +138,9 @@ Sidebar → **Translations** (`翻译记录`).
 - Failures and timeouts keep the original and the error. The plugin calls the model once. It does not retry.
 - Copy the filtered rows as JSON or Markdown.
 - If a write is over magpie's 64KiB options limit, the page shows the byte count in the toast and in `#jobError`, and it does not call `options.set`.
+- A gateway 401 or 403 stays on the row and in the banner at the top of the page.
 
-New rows are written under the data directory. This page cannot read that directory. The list stays empty until magpie can read a plugin's own files. Older `options.feed` data, if you still have it, still shows.
+The full row stays in the data directory. The page shows the summary, clipped so it stays small.
 
 ## Where data is stored
 
@@ -143,11 +149,14 @@ Full history stays on disk, mode `0600`:
 - `$MAGPIE_TRANSLATOR_HOME`, or `$XDG_DATA_HOME/magpie-translator`, or `~/.local/share/magpie-translator/`
 - `history.json` — full rows, including the text that was sent and the prompt used for compare. No gateway key
 - `log.jsonl`, `latest.txt` (when `display` includes `file`), `compare-seen.json`
-- `inbox/*.json` — one file per rewrite, removed when the worker takes it
-- `feed.json` — a public slice, rewritten only when its JSON changes
-- `worker.json` — pid and source hash of the detached worker
+- `inbox/*.json` — one file per rewrite. The worker claims it by renaming it into `processing/`
+- `processing/` — a claimed job, or a compare claim. On startup the worker picks up files whose owner process is gone
+- `feed.json` — the same public slice, rewritten only when its JSON changes
+- `feed-state.json` — when the summary was last copied into plugin options
+- `worker.lock` — pid, source hash, and parent pid of the one worker
+- `gateway.key` — optional gateway key, mode 0600
 
-The hook and the worker do not write `plugins.json`. A settings save strips `gatewayKey`, `feed`, and `models` if they were left there. The page cannot read the data directory. `feed.json` is for you, and for a future magpie read. It is not copied into plugin options.
+The hook does not write `plugins.json`. The worker writes `options.feed` only when the summary changed, and it moves a `gatewayKey` out to `gateway.key`. Both writes are a temp file renamed into place. A settings save strips `feed` and `models`. The page drops `feed` before it saves, so a settings save does not send the summary back. A real change to `plugins.json` restarts the magpie hook host on the next gateway request. An unchanged summary does not touch the file, so it does not restart the host.
 
 The original is sent only to the translator model you configured, through the local magpie gateway. The plugin opens no port of its own. Webhook and desktop notifications stay off unless you opt in, and they are skipped for anything that is not a local request. The body has no gateway key.
 
@@ -157,13 +166,13 @@ The original is sent only to the translator model you configured, through the lo
 
 `onResponse` in `src/hooks.mjs` writes one job file and returns. It does not call a model. `onRequest` does not rewrite the body. It only marks the plugin's own request so that request is not queued again. `magpie plugin list` still prints `async gateway hook onRequest` for every async hook. That string is magpie's.
 
-Magpie aborts a hook at `gatewayTimeoutMs` (at most 10 seconds; this package leaves the host default, which is shorter). A real rewrite takes longer than that, so the call runs in `src/worker.mjs`. That process is detached, writes only in the data directory, and waits up to `translateTimeoutMs` (10 seconds to 10 minutes, default 2 minutes). Loading the hook starts it, and so does a new job. An options write restarts the host, which loads the hook again, so compare and retry do not wait for some other reply.
+Magpie aborts a hook at `gatewayTimeoutMs` (at most 10 seconds; this package leaves the host default, which is shorter). A real rewrite takes longer than that, so the call runs in `src/worker.mjs`. One worker holds `worker.lock`. Its environment is the path, home, and config variables it needs, plus the parent pid. It does not receive the rest of the host environment, and it does not receive a gateway key. It exits when that parent exits, when the plugin is turned off, or when the plugin entry is gone from `plugins.json`. It waits up to `translateTimeoutMs` (10 seconds to 10 minutes, default 2 minutes). Loading the hook starts it, and so does a new job. Compare and retry read `_compare` from options and run in that worker. They do not wait for another reply. A compare nonce is claimed with an exclusive file and marked seen only after the result is stored. A crash before that runs the compare again. A model error that was recorded does not run again.
 
 There is no middleware. Bytes that pass through the gateway are not changed. A Codex stream whose `response.completed` has no output is still invisible.
 
 The page is sandboxed: no network, no inline scripts. It may call `magpie.read` only for `providers:list` and `usage:summary`. Compare and retry are a small `magpie.options.set`. The payload drops `feed` and measures UTF-8 bytes. Over 60KiB it shows an error and does not write.
 
-Magpie has no page read of a plugin data file, no page call into the gateway, and no plugin job API. Hooks, the page, and tools were all too short or pointed at the wrong place for a 12–105 second rewrite. The queue plus the detached worker is the path that finishes the call. The history page still cannot show the new rows. What is missing is a host read of the plugin's data directory, or a bridge call that can run a model without the 10 second hook cap.
+Magpie has no page read of a plugin data file, no page call into the gateway, and no plugin job API. Hooks, the page, and tools were all too short or pointed at the wrong place for a 12–105 second rewrite. The queue plus the detached worker finishes the call. The history page reads the summary from options, which is the route magpie already gives a page. Publishing it restarts the hook host, which is why this package is not in the official registry.
 
 Tool calls, reasoning, pure JSON, structured-output requests, title helpers, and (by default) text already in the target language are skipped. Text longer than 20,000 characters is cut. A code-only reply is sent when masking is off, because the code is the text. With `maskCode` on, a reply that is only code is skipped.
 

@@ -15,7 +15,8 @@ import { ensureWorker } from "./worker.mjs"
 // “async gateway hook onRequest”，不看这里还导出了什么。
 // onResponse 只把任务写进数据目录就返回。翻译本身要 12–105 秒，
 // 而宿主把 hook 停在 gatewayTimeoutMs（最多 10 秒，host.js）。
-// 脱离的工人在数据目录里做完，不写 plugins.json，也不写插件目录。
+// 脱离的工人做完后，把一份有大小上限的摘要写进 options.feed。
+// 摘要没变就不碰 plugins.json。hook 自己不写这个文件。
 
 if (process.env.MAGPIE_TRANSLATOR_NO_SPAWN !== "1") ensureWorker()
 

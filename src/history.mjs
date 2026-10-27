@@ -3,7 +3,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { DEFAULT_HISTORY_LIMIT } from "./constants.mjs"
 import { parseHistoryLimit } from "./config.mjs"
-import { dataDir, ensureDir, logPath } from "./paths.mjs"
+import { dataDir, logPath, writeAtomic } from "./paths.mjs"
 
 const PUBLIC = ["id", "at", "agent", "model", "translator", "language", "style", "ms", "original", "translation", "error", "status"]
 
@@ -115,8 +115,7 @@ export function writePublicFeed(env = process.env) {
   try {
     if (fs.readFileSync(file, "utf8") === next) return false
   } catch { /* 还没有这份文件 */ }
-  ensureDir(dataDir(env))
-  fs.writeFileSync(file, next, { mode: 0o600 })
+  writeAtomic(file, next)
   return true
 }
 
@@ -225,11 +224,7 @@ function readLogRows(env) {
 }
 
 function writeHistory(rows, env) {
-  const file = historyPath(env)
-  ensureDir(path.dirname(file))
-  const tmp = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, `${JSON.stringify(rows)}\n`, { mode: 0o600 })
-  fs.renameSync(tmp, file)
+  writeAtomic(historyPath(env), `${JSON.stringify(rows)}\n`)
 }
 
 export function seenPath(env = process.env) {
@@ -244,9 +239,7 @@ export function markSeen(nonce, env = process.env) {
   const seen = readSeen(env)
   if (!nonce || seen.includes(nonce)) return
   seen.push(nonce)
-  const file = seenPath(env)
-  ensureDir(path.dirname(file))
-  fs.writeFileSync(file, `${JSON.stringify(seen.slice(-200))}\n`, { mode: 0o600 })
+  writeAtomic(seenPath(env), `${JSON.stringify(seen.slice(-200))}\n`)
 }
 
 function readSeen(env) {

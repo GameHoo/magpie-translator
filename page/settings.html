@@ -102,6 +102,16 @@
   </section>
 
   <section class="section">
+    <div class="section-head"><div><h2 data-i18n="key.title">网关</h2><p data-i18n="key.sub">本机回环不需要密钥。只有网关拒绝本机请求时才填写。</p></div></div>
+    <div class="card">
+      <div class="row stack">
+        <div class="label"><b data-i18n="key.label">网关密钥</b><small data-i18n="key.help">保存后由工人写到数据目录的 gateway.key（权限 0600），并从 plugins.json 里删掉。留空表示不改已经存好的密钥。认证失败会显示在翻译记录页。</small></div>
+        <input class="input" id="gatewayKey" type="password" autocomplete="new-password" data-dirty>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
     <div class="section-head">
       <div><h2 data-i18n="prompt.title">提示词</h2><p data-i18n="prompt.sub">所有规则共用；单条规则可在「高级」里覆盖。</p></div>
       <div class="spacer"></div>

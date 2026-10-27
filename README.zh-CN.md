@@ -12,7 +12,9 @@
 
 ## 它是什么
 
-[magpie](https://github.com/yetone/magpie) 的插件。核心不是「翻译」，而是一层通用的**转述层**：
+[magpie](https://github.com/yetone/magpie) 的插件。这个包还没有进官方的 [magpie-community](https://github.com/magpie-community/plugins) 插件列表。magpie 把 hook 停在 10 秒，也没有给插件用的长任务接口，页面也读不到插件自己的数据目录。翻译记录页显示的是工人写进这个插件 options 的一份短摘要。摘要的文字变了才写，先等它稳定 3 秒，并且 15 秒内最多写一次。每次这样写入都会让 magpie 的 hook 宿主重启一次。独立安装接受这个重启。在 magpie 能不重启宿主就显示插件数据、或做完一次长任务之前，这个包留在本仓库。
+
+核心不是「翻译」，而是一层通用的**转述层**：
 
 - 工作模型（比如 Codex 背后的 GPT）照常回答，agent 收到的是原文，会话历史不变；
 - 这一轮结束后，插件把最终回复交给你选的**第二个模型**，按**提示词**重新表达一遍；
@@ -384,6 +386,7 @@ magpie plugin options magpie-translator '{
 | 翻译记录保留 | `historyLimit` | 500 条 | 面板可选 100、500、1000、5000 条或「不保存」(`0`)，记录存在本机 |
 | 翻译规则 | `rules` | `[]` | 拖动或用箭头调整顺序。原始模型可以选具体模型、「所有模型」或「所有 provider/*」 |
 | 提示词 | `prompt` | 空 | 编辑框里先显示上面那句英文默认任务句。不改它就保存成空值，翻译时用的还是这一句。可以插入 `{language}`、`{style}`、`{model}`、`{translator}`，下方有实时预览。点「恢复默认」会还原 |
+| 网关密钥 | 存在 `gateway.key` | 空 | 本机回环不需要密钥。这里填的值只提交一次，工人把它写到数据目录的 `gateway.key`（权限 0600），并从 `plugins.json` 里删掉。留空表示保留已经存好的密钥 |
 
 关于提示词：编辑框里显示的默认句和代码里的默认任务句是同一句。不改它直接保存时，配置里写的是空值，翻译时再把 `{language}` 换成语言名：
 
@@ -393,11 +396,13 @@ Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning th
 
 不管提示词怎么改，插件都会留下内部标记（防止翻译请求被再翻译一遍）和 `Output only the rewritten text.`。默认不提占位符。
 
-以下字段只能在命令行里改：`display`（`log`、`file`、`stdout`、`notify`、`webhook`，默认 `["log"]`）、`webhookUrl`、`magpieBaseUrl`、`maskCode`（默认关）、`allowRemoteExport`（默认关）。没有 `gatewayKey` 这一项。密钥只从环境变量 `MAGPIE_TRANSLATOR_GATEWAY_KEY` 读取，设了才会送 `Authorization`。`notify` 和 `webhook` 必须写进 `display` 才启用，并且默认只对来源是 `local` 的请求发出；`allowRemoteExport` 打开后才包括其他来源。本包不设置 `gatewayTimeoutMs`，hook 沿用 magpie 自己的短时限。模型调用不在 hook 里。不再有本机面板、`localPanel` 或 `panelPort`。
+以下字段只能在命令行里改：`display`（`log`、`file`、`stdout`、`notify`、`webhook`，默认 `["log"]`）、`webhookUrl`、`magpieBaseUrl`、`maskCode`（默认关）、`allowRemoteExport`（默认关）。`notify` 和 `webhook` 必须写进 `display` 才启用，并且默认只对来源是 `local` 的请求发出；`allowRemoteExport` 打开后才包括其他来源。本包不设置 `gatewayTimeoutMs`，hook 沿用 magpie 自己的短时限。模型调用不在 hook 里。工人只在数据目录有 `gateway.key` 时才送 `Authorization`。这个文件不存在时，才读环境变量 `MAGPIE_TRANSLATOR_GATEWAY_KEY`。不再有本机面板、`localPanel` 或 `panelPort`。
 
 ## 翻译记录页
 
 位置：magpie 侧栏 → **翻译记录**（英文界面叫 Translations）。
+
+列表就是这个插件 options 里的 `feed`。工人做完转述后把摘要写进去，新记录这时才出现。列表是空的，表示还没有命中规则的回复被转述过。
 
 - **列表**：每条记录显示 agent、状态（成功、失败、超时、已跳过）、时间和「原始模型 → 翻译模型」。顶部汇总成功率和中位延迟。支持按关键词搜索原文和译文，也能按 Agent、源模型、翻译模型、状态筛选。
 - **详情**：原文和译文按段落对齐，同步滚动。可以一键复制原文或译文。代码块会标出是「原样保留」还是「译文改了代码」。原文太长被截断时也会提示。
@@ -405,8 +410,9 @@ Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning th
 - **失败与超时**：翻译模型报错或超时，记录会留下原文和错误信息，可以点「重试」，或「换个模型重试」。插件只请求一次，不再自动重试。
 - **导出**：把当前筛选结果复制成 JSON 或 Markdown（原文和译文对照），也可以只复制当前这一条。
 - 一次写入如果按 UTF-8 字节超过 magpie 的 64KiB 上限，页面会在提示条和 `#jobError` 里写出字节数，并且不会调用 `options.set`。
+- 网关返回 401 或 403 时，错误留在这条记录上，页面顶部也会出现一条说明。
 
-新记录写在数据目录里。这一页读不到那个目录，所以列表会是空的，直到 magpie 能读插件自己的文件。以前留在 `options.feed` 里的旧记录还能显示。
+完整记录在数据目录里。页面上是截短后的摘要，这样一份 options 才放得下。
 
 ## 工作原理
 
@@ -416,23 +422,24 @@ Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning th
               ├─ hook onRequest：认出插件自己发的翻译请求
               └─ hook onResponse：抽出最终正文，写进数据目录的 inbox，马上返回
                     └─► 脱离的工人 POST magpie /v1/chat/completions（model = 翻译模型）
-                          └─► history.json 和 feed.json（只在内容变化时写）
+                          └─► history.json，以及 options.feed（摘要变了才写，宿主因此重启一次）
 ```
 
 - **`onResponse` 只入队。** 模型调用在 `src/worker.mjs`，经本机 magpie 网关，等待时间是 `translateTimeoutMs`（默认 120 秒，最长 600 秒）。hook 的返回值会被丢掉，客户端字节已经写完。`onRequest` 不改请求。两者都在 `src/hooks.mjs`。`magpie plugin list` 仍固定印 `async gateway hook onRequest`，那是 magpie 写死的句子。
 - **没有 middleware。** 经过网关的字节保持原样。Codex 的 `response.completed` 如果本身没有正文，插件仍然看不到这一轮。
 - **页面在沙箱里**：iframe，`connect-src 'none'`，没有内联脚本，也不能 `fetch`。它只能 `magpie.read` `providers:list` 和 `usage:summary`。对比和重试写的是一小份 `_compare`，不会把 feed 发回去，并且按 UTF-8 字节计算大小。
-- **magpie 把 hook 停在最多 10 秒**（`host.js` 里的 `gatewayTimeout`，本包不把这个值设成 10 秒）。真实转述要 12～105 秒。页面不能发网络请求，也不能读插件文件。工具调用的时限是 55 秒，而且结果会回到正在对话的 agent。没有给插件用的定时或后台任务接口。所以工人脱离 hook 的中止信号，只写数据目录。加载 hook 时会把它拉起来，新任务也会。设置页的写入会让宿主重载 hook，对比因此不用再等一条无关的回复。
-- **页面仍然读不到新记录。** 缺的是宿主提供的「读取插件数据目录」，或者一次不受 10 秒限制、能调用模型的页面桥。在那之前，「翻译记录」页看不到 `history.json` 里的新行。
-- **出错不影响原流程**：插件出了任何问题，agent 照样拿到原文。插件关掉之后，工人在下一轮空闲时退出。
+- **magpie 把 hook 停在最多 10 秒**（`host.js` 里的 `gatewayTimeout`，本包不把这个值设成 10 秒）。真实转述要 12～105 秒。页面不能发网络请求，也不能读插件文件。工具调用的时限是 55 秒，而且结果会回到正在对话的 agent。没有给插件用的定时或后台任务接口。所以工人脱离 hook 的中止信号。加载 hook 时会把它拉起来，新任务也会。同一时间只有一个工人，锁在 `worker.lock`。父进程没了、插件关掉、或者 `plugins.json` 里已经没有这个插件，工人就退出。它拿到的环境只有路径、家目录和配置目录，外加父进程号，没有网关密钥。
+- **翻译记录页读的是 options 里的摘要。** 这是 magpie 已经给页面的读取方式。摘要变了才写进 `plugins.json`，先稳定 3 秒，15 秒最多一次。真写了，下一次网关请求会重启 hook 宿主。内容相同就不碰文件。因为每次更新都会重启宿主，这个包没有提交到官方列表。
+- **对比和重试**读 options 里的 `_compare`，工人自己做，不必再等一条回复。同一个 nonce 用独占文件认领，结果写入历史之后才记为做过。做的过程中崩溃，下次还会再做。模型返回的错误记下来之后，不再做第二次。
+- **出错不影响原流程**：插件出了任何问题，agent 照样拿到原文。
 
 只翻译给人看的最终正文。工具调用、推理和 thinking 都不翻译。以下几种情况会跳过：整段回复是 JSON 或请求要求结构化输出、标题或摘要之类的辅助请求、原文已经是目标语言。正文超过 20000 字会截掉。遮住代码时，只剩代码的回复不会送出；默认不遮住，这样的回复会送出。
 
 ## 隐私
 
 - 原文只会发给你在规则里选的翻译模型，经本机 magpie 网关转发。插件本身不连接任何外部服务。
-- 完整记录保存在本机数据目录：`$MAGPIE_TRANSLATOR_HOME`，否则 `$XDG_DATA_HOME/magpie-translator`，再否则 `~/.local/share/magpie-translator/`。里面有 `history.json`（含送出的正文和提示词，供对比使用，模式 0600）、`log.jsonl`、`latest.txt`、`compare-seen.json`、`inbox/`、`feed.json`、`worker.json`。没有 gateway key。「翻译记录保留」设为「不保存」时，不写历史记录。
-- hook 和工人都不写 `plugins.json`。`feed.json` 只在公开内容变化时重写。设置保存会去掉残留的 `gatewayKey`、`feed` 和 `models`。
+- 完整记录保存在本机数据目录：`$MAGPIE_TRANSLATOR_HOME`，否则 `$XDG_DATA_HOME/magpie-translator`，再否则 `~/.local/share/magpie-translator/`。里面有 `history.json`（含送出的正文和提示词，供对比使用，模式 0600）、`log.jsonl`、`latest.txt`、`compare-seen.json`、`inbox/`、`processing/`、`feed.json`、`feed-state.json`、`worker.lock`。网关密钥如果需要，单独放在 `gateway.key`（权限 0600），不进 `plugins.json`，也不进历史记录。「翻译记录保留」设为「不保存」时，不写历史记录。
+- hook 不写 `plugins.json`。工人只在摘要变化时，用临时文件换名写入 `options.feed`，并把 options 里的 `gatewayKey` 搬到 `gateway.key`。设置保存会去掉残留的 `feed` 和 `models`。页面提交前会丢掉 `feed`，避免把摘要再发回去。
 - 插件不监听本机端口。
 - `webhook` 和桌面通知默认不启用。启用后也只对来源是本机的请求发出，内容里不含 gateway key。
 
@@ -451,13 +458,13 @@ Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning th
 原文已经是目标语言时默认跳过。如果想把它也改写得更直白，把「原文已是目标语言时跳过」关掉。
 
 **点了「对比」或「重试」没反应？**
-页面把一小份 `_compare` 写进配置。宿主重载 hook，工人接着做，不必再等一条无关的回复。做完的结果在数据目录里。这一页读不到那个目录，所以列表不会自己多出一行。
+页面把一小份 `_compare` 写进配置。宿主重载 hook，工人接着做，不必再等一条无关的回复。做完后摘要写回 options，列表会出现这一条。摘要要先稳定 3 秒，所以不会在点击的同一瞬间出现。
 
 **`magpie plugin list` 显示 `async gateway hook onRequest`？**
 这行字是 magpie 对所有异步 hook 写死的，它不读取插件导出的函数名。`onResponse` 把最终正文放进收件箱就返回。模型调用在脱离的工人里。`onRequest` 不改请求体，只认出插件自己发出的翻译请求。
 
 **打开页面时记录是空的，但 `history.json` 里有？**
-页面只能读 magpie 允许的那两项，以及 `options`。它读不到数据目录。这是宿主还没提供的能力，不是记录没写上。
+页面读的是 options 里的 `feed`，不是数据目录。工人会把摘要写进去。如果插件刚做完、还在 3 秒稳定期里，或者 15 秒内已经写过一次，列表会晚一点更新。宿主重启之后，新的工人会把还没发布的摘要补上。
 
 **Codex 用 ChatGPT 账号登录时抓不到正文？**
 插件不再改流。如果 `response.completed` 不带正文，插件就看不到这一轮。详见 [docs/DESIGN.md](docs/DESIGN.md)。
