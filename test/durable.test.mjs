@@ -5,12 +5,12 @@ import os from "node:os"
 import path from "node:path"
 import { test } from "bun:test"
 import { gatewayKeyPath } from "../src/auth.mjs"
-import { FEED_BUDGET, hasSeen, markSeen, publicFeed, recordTranslation, writePublicFeed } from "../src/history.mjs"
+import { FEED_BUDGET, addComparison, findHistory, hasSeen, markSeen, publicFeed, recordTranslation, replaceTranslation, writePublicFeed } from "../src/history.mjs"
 import { packageRoot, syncHostSurface } from "../src/options.mjs"
-import { enqueue, INBOX_CAP, listInbox, processingDir, recoverProcessing } from "../src/queue.mjs"
+import { enqueue, INBOX_CAP, finishClaim, listInbox, processingDir, recoverProcessing, takeJob, touchClaim } from "../src/queue.mjs"
 import { minimalEnv } from "../src/worker.mjs"
-import { alive, parentGone, processCompare, processOnce, shouldExitAfterPublish, workerLaunch } from "../src/worker.mjs"
-import { CONFLICT_LIMIT_MS } from "../src/proc.mjs"
+import { alive, parentGone, processCompare, processOnce, refreshWorkerLock, runQueued, shouldExitAfterPublish, sweepDeadLocks, workerLaunch } from "../src/worker.mjs"
+import { PUBLISH_RETRY_LIMIT_MS, publishBackoff, workerToken } from "../src/proc.mjs"
 
 function tempHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-durable-"))
@@ -273,12 +273,19 @@ test("收件箱最多留下 100 条，最新的还在", () => {
   fs.rmSync(home, { recursive: true, force: true })
 })
 
-test("父进程退出后，plugins.json 冲突最多再试一段时间", () => {
-  assert.equal(shouldExitAfterPublish({ parentDead: true, reason: "conflict", conflictSince: 1000, now: 1000 + CONFLICT_LIMIT_MS - 1 }), false)
-  assert.equal(shouldExitAfterPublish({ parentDead: true, reason: "conflict", conflictSince: 1000, now: 1000 + CONFLICT_LIMIT_MS }), true)
-  assert.equal(shouldExitAfterPublish({ parentDead: true, reason: "debounce", conflictSince: 1000, now: 1000 + CONFLICT_LIMIT_MS + 5000 }), false)
-  assert.equal(shouldExitAfterPublish({ parentDead: true, reason: "empty", conflictSince: 0, now: 5 }), true)
-  assert.equal(shouldExitAfterPublish({ parentDead: false, reason: "conflict", conflictSince: 1000, now: 999999 }), false)
+test("父进程退出后，还在等的发布都会退避并在时限后停止", () => {
+  const limit = PUBLISH_RETRY_LIMIT_MS
+  for (const reason of ["conflict", "debounce", "rate", "error", "read"]) {
+    assert.equal(shouldExitAfterPublish({ parentDead: true, reason, retrySince: 1000, now: 1000 + limit - 1 }), false)
+    assert.equal(shouldExitAfterPublish({ parentDead: true, reason, retrySince: 1000, now: 1000 + limit }), true)
+  }
+  assert.equal(shouldExitAfterPublish({ parentDead: true, reason: "conflict", conflictSince: 1000, now: 1000 + limit }), true)
+  assert.equal(shouldExitAfterPublish({ parentDead: true, reason: "empty", retrySince: 0, now: 5 }), true)
+  assert.equal(shouldExitAfterPublish({ parentDead: false, reason: "debounce", retrySince: 1000, now: 999999 }), false)
+  assert.equal(publishBackoff(0), 50)
+  assert.equal(publishBackoff(1), 100)
+  assert.equal(publishBackoff(2), 200)
+  assert.equal(publishBackoff(20), 1000)
   const launch = workerLaunch({ PATH: "/usr/bin", HOME: "/Users/magpie" }, "/Users/magpie/Library/Application Support/magpie-translator", "token")
   assert.equal(launch.options.windowsHide, true)
 })
@@ -369,6 +376,181 @@ test("父进程已经不在时，手头的任务仍然做完", async () => {
     assert.equal(rows[0].error, "")
   } finally {
     delete process.env.MAGPIE_TRANSLATOR_PARENT_PID
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("同 id 的错误不会盖掉已经成功的记录", () => {
+  const home = tempHome()
+  recordTranslation({
+    id: "keep-ok",
+    original: "Hello there from the model.",
+    translation: "你好",
+    status: "done",
+    translator: "mock/zh",
+  }, process.env, 20)
+  addComparison("keep-ok", { translator: "other", translation: "こんにちは" }, process.env)
+  const kept = recordTranslation({
+    id: "keep-ok",
+    original: "Hello there from the model.",
+    translation: "",
+    error: "boom",
+    status: "error",
+  }, process.env, 20)
+  assert.equal(kept.translation, "你好")
+  assert.equal(kept.error, "")
+  assert.equal(kept.status, "done")
+  assert.equal(kept.comparisons.length, 1)
+  const disk = findHistory("keep-ok", process.env)
+  assert.equal(disk.translation, "你好")
+  assert.equal(disk.comparisons[0].translation, "こんにちは")
+  const replaced = replaceTranslation("keep-ok", { translation: "", error: "nope", ms: 4 }, process.env)
+  assert.equal(replaced.translation, "你好")
+  assert.equal(replaced.error, "")
+  assert.equal(findHistory("keep-ok", process.env).comparisons.length, 1)
+  const again = recordTranslation({
+    id: "keep-ok",
+    original: "Hello there from the model.",
+    translation: "新的",
+    status: "done",
+  }, process.env, 20)
+  assert.equal(again.translation, "新的")
+  assert.equal(again.error, "")
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("认领只有 token 是自己的才刷新或完成", () => {
+  const home = tempHome()
+  const env = { ...process.env }
+  delete env.MAGPIE_TRANSLATOR_LOCK_TOKEN
+  const dir = processingDir(env)
+  fs.mkdirSync(dir, { recursive: true })
+  const claim = path.join(dir, "foreign.json")
+  const foreign = { id: "foreign", ownerToken: "other", heartbeat: 1, original: "Hello" }
+  fs.writeFileSync(claim, `${JSON.stringify(foreign)}\n`)
+  const before = fs.readFileSync(claim, "utf8")
+  assert.equal(touchClaim(claim, env), false)
+  assert.equal(finishClaim(claim, env), false)
+  assert.equal(fs.readFileSync(claim, "utf8"), before)
+  const bare = path.join(dir, "bare.json")
+  fs.writeFileSync(bare, `${JSON.stringify({ id: "bare", heartbeat: 1 })}\n`)
+  const bareBefore = fs.readFileSync(bare, "utf8")
+  assert.equal(touchClaim(bare, env), false)
+  assert.equal(finishClaim(bare, env), false)
+  assert.equal(fs.readFileSync(bare, "utf8"), bareBefore)
+  assert.equal(JSON.parse(fs.readFileSync(bare, "utf8")).ownerToken, undefined)
+  const ours = path.join(dir, "ours.json")
+  fs.writeFileSync(ours, `${JSON.stringify({ id: "ours", ownerToken: workerToken(env), heartbeat: 1 })}\n`)
+  assert.equal(touchClaim(ours, env), true)
+  const touched = JSON.parse(fs.readFileSync(ours, "utf8"))
+  assert.ok(touched.heartbeat > 1)
+  assert.equal(touched.ownerToken, workerToken(env))
+  assert.equal(finishClaim(ours, env), true)
+  assert.equal(fs.existsSync(ours), false)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("锁丢了就中止正在进行的请求，认领还在，不记错误", async () => {
+  const home = tempHome()
+  const env = { ...process.env }
+  delete env.MAGPIE_TRANSLATOR_LOCK_TOKEN
+  enqueue(job({ id: "abort-me" }), env)
+  const taken = takeJob(env)
+  let lost = false
+  const fetchImpl = async (_url, init) => {
+    lost = true
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("should have aborted")), 3000)
+      init.signal.addEventListener("abort", () => {
+        clearTimeout(timer)
+        const err = new Error("aborted")
+        err.name = "AbortError"
+        reject(err)
+      })
+    })
+  }
+  await assert.rejects(
+    () => runQueued(taken, env, { fetchImpl, lockLost: () => lost }),
+    (err) => err?.name === "StopWorker",
+  )
+  assert.equal(fs.existsSync(taken.__claim), true)
+  assert.equal(fs.existsSync(path.join(home, "history.json")), false)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("过期的 worker.lock.dead 会清掉，心跳用临时文件换名", () => {
+  const home = tempHome()
+  const stale = path.join(home, "worker.lock.dead.old")
+  const fresh = path.join(home, "worker.lock.dead.fresh")
+  fs.writeFileSync(stale, `${JSON.stringify({ token: "old", heartbeat: 1 })}\n`)
+  fs.writeFileSync(fresh, `${JSON.stringify({ token: "fresh", heartbeat: Date.now() })}\n`)
+  const bare = path.join(home, "worker.lock.dead.bare")
+  fs.writeFileSync(bare, "not-json")
+  const old = new Date(Date.now() - 9000)
+  fs.utimesSync(bare, old, old)
+  const bareFresh = path.join(home, "worker.lock.dead.barefresh")
+  fs.writeFileSync(bareFresh, "not-json")
+  sweepDeadLocks(home)
+  assert.equal(fs.existsSync(stale), false)
+  assert.equal(fs.existsSync(bare), false)
+  assert.equal(fs.existsSync(fresh), true)
+  assert.equal(fs.existsSync(bareFresh), true)
+  const lock = path.join(home, "worker.lock")
+  fs.writeFileSync(lock, `${JSON.stringify({ token: "mine", heartbeat: 1, hash: "h", parent: 1, pid: 1 })}\n`)
+  assert.equal(refreshWorkerLock(home, "other"), false)
+  assert.equal(JSON.parse(fs.readFileSync(lock, "utf8")).heartbeat, 1)
+  assert.equal(refreshWorkerLock(home, "mine"), true)
+  const next = JSON.parse(fs.readFileSync(lock, "utf8"))
+  assert.ok(next.heartbeat > 1)
+  assert.equal(next.token, "mine")
+  const names = fs.readdirSync(home)
+  assert.equal(names.some((name) => name.includes(".tmp") || name.startsWith("worker.lock.beat.")), false)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("进行中的错误赶上已有成功时，不覆盖也不发 webhook", async () => {
+  const home = tempHome()
+  const env = { ...process.env }
+  delete env.MAGPIE_TRANSLATOR_LOCK_TOKEN
+  let hooks = 0
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(req) {
+      if (new URL(req.url).pathname === "/hook") {
+        hooks += 1
+        return new Response("ok")
+      }
+      return new Response("no")
+    },
+  })
+  try {
+    enqueue(job({
+      id: "race-ok",
+      display: ["webhook"],
+      origin: "local",
+      webhookUrl: `http://127.0.0.1:${server.port}/hook`,
+    }), env)
+    const taken = takeJob(env)
+    const fetchImpl = async () => {
+      recordTranslation({
+        id: "race-ok",
+        original: "Hello there from the model.",
+        translation: "你好",
+        status: "done",
+        translator: "mock/zh",
+      }, env, 20)
+      throw new Error("late failure")
+    }
+    const result = await runQueued(taken, env, { fetchImpl })
+    assert.equal(result.translation, "你好")
+    assert.equal(result.error, "")
+    assert.equal(hooks, 0)
+    assert.equal(fs.existsSync(taken.__claim), false)
+    assert.equal(fs.existsSync(path.join(home, "delivered")), false)
+    assert.equal(findHistory("race-ok", env).translation, "你好")
+  } finally {
+    server.stop(true)
     fs.rmSync(home, { recursive: true, force: true })
   }
 })

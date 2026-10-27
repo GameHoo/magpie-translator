@@ -23,6 +23,11 @@ export function readHistory(env = process.env) {
   }
 }
 
+function isSuccess(row) {
+  if (!row || row.error) return false
+  return row.status === "done" || row.status === "ok"
+}
+
 export function recordTranslation(entry, env = process.env, limit = DEFAULT_HISTORY_LIMIT) {
   const cap = parseHistoryLimit(limit)
   if (cap === 0) {
@@ -50,6 +55,8 @@ export function recordTranslation(entry, env = process.env, limit = DEFAULT_HIST
     comparisons: [],
   }
   if (!row.id) return null
+  const previous = readHistory(env).find((item) => item.id === row.id)
+  if (previous && isSuccess(previous) && !isSuccess(row)) return publicEntry(previous)
   const next = [row, ...readHistory(env).filter((item) => item.id !== row.id)].slice(0, cap)
   writeHistory(next, env)
   return publicEntry(row)
@@ -76,6 +83,7 @@ export function replaceTranslation(entryId, patch, env = process.env) {
   const rows = readHistory(env)
   const row = rows.find((item) => item.id === entryId)
   if (!row) return null
+  if (isSuccess(row) && patch.error) return publicEntry(row)
   row.translation = patch.translation || ""
   row.error = patch.error || ""
   row.ms = Number(patch.ms) || 0

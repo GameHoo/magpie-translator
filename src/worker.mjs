@@ -8,7 +8,7 @@ import { presentation } from "./config.mjs"
 import { recordTranslation, replaceTranslation, addComparison, findHistory, hasSeen, markDelivered, markSeen, restoreFeed, wasDelivered, writePublicFeed } from "./history.mjs"
 import { findPlugin, pluginPresence, pluginTurnedOff, readPluginList, syncHostSurface } from "./options.mjs"
 import { dataDir, ensureDir, magpieBaseUrl, writeAtomic } from "./paths.mjs"
-import { HEARTBEAT_MS, lockIsStale, pidAlive, shouldExitAfterPublish, workerToken } from "./proc.mjs"
+import { HEARTBEAT_MS, PUBLISH_WAIT_REASONS, STALE_MS, beatIsStale, lockIsStale, pidAlive, publishBackoff, shouldExitAfterPublish, workerToken } from "./proc.mjs"
 import { claimCompare, finishClaim, holdCompare, queueDepth, recoverProcessing, takeJob, touchClaim } from "./queue.mjs"
 import { persistItem } from "./sinks.mjs"
 import { translateJob } from "./translate.mjs"
@@ -161,6 +161,7 @@ export async function acquireWorkerLock(dir, hash, parent, token = process.env.M
       if (current && String(current.token) === id) {
         try { fs.unlinkSync(privateFile) } catch { /* 没有临时文件 */ }
         clearStop(dir)
+        sweepDeadLocks(dir)
         return true
       }
       if (current && !lockIsStale(current)) {
@@ -175,6 +176,7 @@ export async function acquireWorkerLock(dir, hash, parent, token = process.env.M
     if (owned && String(owned.token) === id) {
       try { fs.unlinkSync(privateFile) } catch { /* 锁已经链上 */ }
       clearStop(dir)
+      sweepDeadLocks(dir)
       return true
     }
   }
@@ -194,25 +196,43 @@ function releaseWorkerLock(dir, token) {
     return
   }
   try { fs.unlinkSync(grave) } catch { /* 已经不在 */ }
+  sweepDeadLocks(dir)
 }
 
-function refreshLock(dir, token) {
+export function sweepDeadLocks(dir, now = Date.now()) {
+  let names = []
+  try { names = fs.readdirSync(dir) } catch { return }
+  for (const name of names) {
+    if (!name.startsWith("worker.lock.dead.")) continue
+    const file = path.join(dir, name)
+    const record = readLock(file)
+    const beat = Number(record?.heartbeat)
+    let stale = false
+    if (Number.isFinite(beat) && beat > 0) stale = beatIsStale(beat, now)
+    else {
+      try { stale = now - fs.statSync(file).mtimeMs > STALE_MS } catch { continue }
+    }
+    if (!stale) continue
+    try { fs.unlinkSync(file) } catch { /* 可能正被链回去 */ }
+  }
+}
+
+export function refreshWorkerLock(dir, token) {
   const file = path.join(dir, "worker.lock")
-  let fd
-  try { fd = fs.openSync(file, "r+") } catch { return true }
-  try {
-    const current = JSON.parse(fs.readFileSync(fd, "utf8"))
-    if (!current || String(current.token) !== String(token)) return false
-    const next = `${JSON.stringify({ ...current, heartbeat: Date.now(), pid: process.pid })}\n`
-    const buf = Buffer.from(next)
-    fs.writeSync(fd, buf, 0, buf.length, 0)
-    fs.ftruncateSync(fd, buf.length)
-    const now = new Date()
-    try { fs.futimesSync(fd, now, now) } catch { /* 心跳数字已经写上 */ }
-  } catch {
+  const current = readLock(file)
+  if (!current) return true
+  if (String(current.token) !== String(token)) return false
+  const next = { ...current, heartbeat: Date.now(), pid: process.pid }
+  const temp = path.join(dir, `worker.lock.beat.${token}`)
+  try { writeAtomic(temp, `${JSON.stringify(next)}\n`) } catch { return true }
+  const again = readLock(file)
+  if (!again || String(again.token) !== String(token)) {
+    try { fs.unlinkSync(temp) } catch { /* 临时心跳可以留着 */ }
+    return false
+  }
+  try { fs.renameSync(temp, file) } catch {
+    try { fs.unlinkSync(temp) } catch { /* 临时心跳可以留着 */ }
     return true
-  } finally {
-    try { fs.closeSync(fd) } catch { /* 已经关上 */ }
   }
   const check = readLock(file)
   if (!check) return true
@@ -275,12 +295,18 @@ function keepClaimFresh(claim, env) {
   return () => clearInterval(timer)
 }
 
-function watchStop(env, ac) {
-  const timer = setInterval(() => {
-    if (pluginShouldExit(env)) ac.abort()
-  }, 200)
+function watchStop(env, ac, extra) {
+  const stop = () => {
+    if (pluginShouldExit(env) || (typeof extra === "function" && extra())) ac.abort()
+  }
+  stop()
+  const timer = setInterval(stop, 200)
   if (typeof timer.unref === "function") timer.unref()
   return () => clearInterval(timer)
+}
+
+function lockLost(opts) {
+  return typeof opts.lockLost === "function" && opts.lockLost()
 }
 
 async function holdAfterRecord(env) {
@@ -300,23 +326,23 @@ export async function runQueued(job, env = process.env, opts = {}) {
   const claim = job?.__claim
   const clean = scrub(job)
   if (clean.id && (findHistory(clean.id, env) || wasDelivered(clean.id, env))) {
-    finishClaim(claim)
+    finishClaim(claim, env)
     return findHistory(clean.id, env)
   }
   const ac = new AbortController()
-  const stopWatch = watchStop(env, ac)
+  const stopWatch = watchStop(env, ac, opts.lockLost)
   const releaseBeat = keepClaimFresh(claim, env)
   const started = Date.now()
   let translation = ""
   let error = ""
   try {
-    if (pluginShouldExit(env)) throw stopError()
+    if (pluginShouldExit(env) || lockLost(opts)) throw stopError()
     translation = await translateJob({ ...clean, gatewayKey: gatewayKeyFor(env) }, {
       fetchImpl: opts.fetchImpl,
       signal: ac.signal,
     })
   } catch (err) {
-    if (err?.name === "StopWorker" || (ac.signal.aborted && pluginShouldExit(env))) {
+    if (err?.name === "StopWorker" || (ac.signal.aborted && (pluginShouldExit(env) || lockLost(opts)))) {
       throw stopError()
     }
     error = String(err?.message || err).slice(0, 500)
@@ -331,7 +357,11 @@ export async function runQueued(job, env = process.env, opts = {}) {
     error,
     status: error ? "error" : "done",
   }
-  recordTranslation(entry, env, clean.historyLimit)
+  const recorded = recordTranslation(entry, env, clean.historyLimit)
+  if (error && recorded && !recorded.error && (recorded.status === "done" || recorded.status === "ok")) {
+    finishClaim(claim, env)
+    return findHistory(clean.id, env) || recorded
+  }
   const first = markDelivered(clean.id, env)
   writePublicFeed(env)
   if (first) {
@@ -342,7 +372,7 @@ export async function runQueued(job, env = process.env, opts = {}) {
   }
   if (typeof opts.afterRecord === "function") await opts.afterRecord(entry)
   await holdAfterRecord(env)
-  finishClaim(claim)
+  finishClaim(claim, env)
   return entry
 }
 
@@ -377,7 +407,7 @@ export async function processCompare(env = process.env, opts = {}) {
   const releaseHold = holdCompare(nonce)
   let finished = false
   const ac = new AbortController()
-  const stopWatch = watchStop(env, ac)
+  const stopWatch = watchStop(env, ac, opts.lockLost)
   const releaseBeat = keepClaimFresh(claim, env)
   try {
     const row = findHistory(entryId, env)
@@ -403,13 +433,13 @@ export async function processCompare(env = process.env, opts = {}) {
       translateTimeoutMs: view.translateTimeoutMs,
     }
     try {
-      if (pluginShouldExit(env)) throw stopError()
+      if (pluginShouldExit(env) || lockLost(opts)) throw stopError()
       translation = await translateJob({ ...job, gatewayKey: gatewayKeyFor(env) }, {
         fetchImpl: opts.fetchImpl,
         signal: ac.signal,
       })
     } catch (err) {
-      if (err?.name === "StopWorker" || (ac.signal.aborted && pluginShouldExit(env))) {
+      if (err?.name === "StopWorker" || (ac.signal.aborted && (pluginShouldExit(env) || lockLost(opts)))) {
         throw stopError()
       }
       error = String(err?.message || err).slice(0, 500)
@@ -432,7 +462,7 @@ export async function processCompare(env = process.env, opts = {}) {
     stopWatch()
     releaseBeat()
     releaseHold()
-    if (finished) finishClaim(claim)
+    if (finished) finishClaim(claim, env)
   }
 }
 
@@ -472,11 +502,12 @@ async function loop() {
   process.on("SIGTERM", shutdown)
   process.on("SIGHUP", shutdown)
   const beat = setInterval(() => {
-    if (!refreshLock(dir, token)) lost = true
+    if (!refreshWorkerLock(dir, token)) lost = true
   }, HEARTBEAT_MS)
   if (typeof beat.unref === "function") beat.unref()
   let idle = 0
-  let conflictSince = 0
+  let retrySince = 0
+  let retryAttempt = 0
   try {
     for (;;) {
       if (lost) break
@@ -484,7 +515,7 @@ async function loop() {
       if (!parentGone() && stopRequested(dir)) break
       let did = false
       try {
-        did = await processOnce()
+        did = await processOnce(process.env, { lockLost: () => lost })
       } catch (err) {
         if (err?.name === "StopWorker") break
         did = false
@@ -492,10 +523,20 @@ async function loop() {
       if (queueDepth() === 0) {
         let published = { wrote: false, reason: "empty" }
         try { published = syncHostSurface() } catch { published = { wrote: false, reason: "error" } }
-        if (published.reason === "conflict") {
-          if (!conflictSince) conflictSince = Date.now()
-        } else conflictSince = 0
-        if (shouldExitAfterPublish({ parentDead: parentGone(), reason: published.reason, conflictSince })) break
+        const waiting = PUBLISH_WAIT_REASONS.includes(published.reason)
+        if (waiting) {
+          if (!retrySince) retrySince = Date.now()
+        } else {
+          retrySince = 0
+          retryAttempt = 0
+        }
+        if (shouldExitAfterPublish({ parentDead: parentGone(), reason: published.reason, retrySince })) break
+        if (waiting && parentGone()) {
+          const wait = publishBackoff(retryAttempt)
+          retryAttempt += 1
+          await sleep(wait)
+          continue
+        }
       } else if (parentGone()) {
         await sleep(50)
         continue

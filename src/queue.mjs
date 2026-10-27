@@ -136,19 +136,32 @@ export function takeJob(env = process.env) {
 
 export function touchClaim(claim, env = process.env) {
   if (!claim) return false
-  const job = readJson(claim)
-  if (!job) return false
   const token = workerToken(env)
-  if (job.ownerToken && String(job.ownerToken) !== token) return false
-  job.ownerToken = token
-  job.heartbeat = Date.now()
-  try { writeAtomic(claim, `${JSON.stringify(job)}\n`) } catch { return false }
-  return true
+  const job = readJson(claim)
+  if (!job || String(job.ownerToken) !== token) return false
+  const latest = readJson(claim)
+  if (!latest || String(latest.ownerToken) !== token) return false
+  latest.heartbeat = Date.now()
+  try { writeAtomic(claim, `${JSON.stringify(latest)}\n`) } catch { return false }
+  const again = readJson(claim)
+  return !!again && String(again.ownerToken) === token
 }
 
-export function finishClaim(claim) {
-  if (!claim) return
-  try { fs.unlinkSync(claim) } catch { /* 已经不在了 */ }
+export function finishClaim(claim, env = process.env) {
+  if (!claim) return false
+  const token = workerToken(env)
+  const job = readJson(claim)
+  if (!job || String(job.ownerToken) !== token) return false
+  const grave = `${claim}.done.${token}.${process.pid}.${Date.now()}`
+  try { fs.renameSync(claim, grave) } catch { return false }
+  const moved = readJson(grave)
+  if (!moved || String(moved.ownerToken) !== token) {
+    try { fs.linkSync(grave, claim) } catch { return false }
+    try { fs.unlinkSync(grave) } catch { /* 已经链回去了 */ }
+    return false
+  }
+  try { fs.unlinkSync(grave) } catch { /* 认领已经挪走 */ }
+  return true
 }
 
 export function compareClaimName(nonce) {

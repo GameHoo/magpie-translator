@@ -2,7 +2,8 @@
 
 export const HEARTBEAT_MS = 2000
 export const STALE_MS = 8000
-export const CONFLICT_LIMIT_MS = 10000
+export const PUBLISH_RETRY_LIMIT_MS = 20000
+export const PUBLISH_WAIT_REASONS = ["conflict", "debounce", "rate", "error", "read"]
 
 export function workerToken(env = process.env) {
   const token = env.MAGPIE_TRANSLATOR_LOCK_TOKEN
@@ -32,10 +33,18 @@ export function lockIsStale(record, now = Date.now()) {
   return beatIsStale(record.heartbeat, now)
 }
 
-// 父进程已经退出，并且 plugins.json 的冲突重试超过时限，才离开。
-export function shouldExitAfterPublish({ parentDead, reason, conflictSince = 0, now = Date.now() } = {}) {
+export function publishBackoff(attempt, base = 50, cap = 1000) {
+  const n = Number(attempt)
+  const exp = Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 5) : 0
+  return Math.min(cap, base * 2 ** exp)
+}
+
+// 父进程已经退出。还在等的发布（防抖、频率、冲突、读、写）超过时限才离开。
+export function shouldExitAfterPublish({ parentDead, reason, conflictSince = 0, retrySince = 0, now = Date.now() } = {}) {
   if (!parentDead) return false
-  if (reason === "conflict") return conflictSince > 0 && now - conflictSince >= CONFLICT_LIMIT_MS
-  if (reason === "debounce" || reason === "rate" || reason === "error" || reason === "read") return false
+  if (PUBLISH_WAIT_REASONS.includes(reason)) {
+    const since = Number(retrySince) || Number(conflictSince) || 0
+    return since > 0 && now - since >= PUBLISH_RETRY_LIMIT_MS
+  }
   return true
 }
