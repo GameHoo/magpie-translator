@@ -1,37 +1,48 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>转述记录</title>
-<link rel="stylesheet" href="history.css">
+<title>magpie-translator · 翻译记录</title>
+<link rel="stylesheet" href="style.css">
 </head>
-<body>
-<main>
-  <h1>转述记录</h1>
-  <p class="note">左右对照原文和译文。换一个翻译模型再译一次后，结果叠在同一条下面。</p>
-  <p id="status">正在读取记录…</p>
-  <div id="tools" hidden>
-    <div class="row">
-      <label class="field">搜索
-        <input id="q" type="search">
-      </label>
-      <label class="field">Agent
-        <select id="agent"><option value="">全部</option></select>
-      </label>
-      <label class="field">来源模型
-        <select id="model"><option value="">全部</option></select>
-      </label>
-      <label class="field">翻译模型
-        <select id="translator"><option value="">全部</option></select>
-      </label>
+<body data-page="history">
+<div class="history">
+
+  <header class="topbar">
+    <h1 data-i18n="hist.title">翻译记录</h1>
+    <span class="sub" id="histCount">共 0 条</span>
+    <div class="stats">
+      <span class="stat"><i style="background:var(--ok)"></i><span id="stOk">成功率 —</span></span>
+      <span class="stat"><svg class="i xs"><use href="#i-zap"/></svg><span id="stLat">中位延迟 —</span></span>
     </div>
-    <p><button type="button" id="exportBtn">导出当前筛选</button></p>
-    <textarea id="export" hidden></textarea>
+    <span class="spacer"></span>
+    <button class="btn sm" id="exportBtn" type="button"><svg class="i sm"><use href="#i-download"/></svg><span data-i18n="hist.export">导出</span><svg class="i xs"><use href="#i-chev-down"/></svg></button>
+    <a class="btn sm ghost" href="settings.html" title="设置"><svg class="i sm"><use href="#i-settings"/></svg><span data-i18n="hist.settings">规则设置</span></a>
+  </header>
+
+  <div class="split">
+    <aside class="list-pane">
+      <div class="list-tools">
+        <label class="search"><svg class="i sm"><use href="#i-search"/></svg>
+          <input class="input" id="q" placeholder="搜索原文或译文" data-i18n-ph="hist.search"><kbd>⌘F</kbd></label>
+        <div class="filters">
+          <select class="select pill" data-f="agent"><option value="">Agent</option></select>
+          <select class="select pill" data-f="source"><option value="">源模型</option></select>
+          <select class="select pill" data-f="translator"><option value="">翻译</option></select>
+          <select class="select pill" data-f="status"><option value="">状态</option></select>
+        </div>
+      </div>
+      <div class="list" id="list" role="listbox" aria-label="翻译记录"></div>
+    </aside>
+
+    <section class="detail" id="detail"></section>
   </div>
-  <div id="list"></div>
-</main>
+</div>
+<div class="toast" id="toast"><svg class="i sm"><use href="#i-check"/></svg><span></span></div>
+<script src="_magpie/bridge.js"></script>
 <script src="catalog.js"></script>
-<script src="history.js"></script>
+<script src="feed.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
