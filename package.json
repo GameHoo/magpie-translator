@@ -11,6 +11,8 @@
     "README.md",
     "README.zh-CN.md",
     "docs/DESIGN.md",
+    "docs/panel_success.png",
+    "docs/panel_failure.png",
     "LICENSE"
   ],
   "scripts": {
