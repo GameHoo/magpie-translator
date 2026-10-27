@@ -63,8 +63,8 @@ test("非中文目标语言写进默认提示词，提示本身不含中文", ()
 test("展示出口认别名，不认识的名字退回默认", () => {
   assert.deepEqual(parseDisplay("file, notify"), ["file", "notify"])
   assert.deepEqual(parseDisplay(["webhook", "nope", "webhook"]), ["webhook"])
-  assert.deepEqual(parseDisplay(undefined), ["panel", "log"])
-  assert.deepEqual(parseDisplay(["not-a-sink"]), ["panel", "log"])
+  assert.deepEqual(parseDisplay(undefined), ["log"])
+  assert.deepEqual(parseDisplay(["not-a-sink"]), ["log"])
 })
 
 test("规则上的语言、提示词、展示和翻译模型盖过全局", async () => {
