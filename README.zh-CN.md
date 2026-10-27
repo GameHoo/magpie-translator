@@ -4,7 +4,7 @@
 
 不写 `language` 时，默认是 `简体中文`。一条规则可以改成 `English`、`日本語`、`Français`，或任何一个人读得懂的名字。默认提示词是英文指令，把这个名字嵌进去，不假设译文必须是中文。
 
-设置和转述记录都在 magpie 里：设置面板，以及用来对照原文和译文的侧栏页。`127.0.0.1:44721` 默认不开，除非 `display` 里有 `panel`，或 `localPanel` 为 true。`npm test` 是 48 项，最近一次在 2026-10-27 跑过。那次没有打开 Codex，也没有打开 magpie 的窗口。
+设置和翻译记录都在 magpie 里：设置面板，以及用来对照原文和译文的侧栏页。`127.0.0.1:44721` 默认不开，除非 `display` 里有 `panel`，或 `localPanel` 为 true。`npm test` 是 51 项，最近一次在 2026-10-27 跑过。那次没有打开 Codex，也没有打开 magpie 的窗口。两个页面是用浏览器打开静态文件看过的（`http://127.0.0.1:44731/`：设置页浅色和深色、模型选择器、记录页对照、超时卡片、窄屏标签），不是在 magpie 窗口里打开的。
 
 English: [README.md](README.md). Design notes and the checks that were run: [docs/DESIGN.md](docs/DESIGN.md). Checked on 2026-10-27.
 
@@ -54,7 +54,7 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 
    交给 `plugin options` 的 JSON 会整份替换插件配置，不会和上一份合并。下一轮结束的回复使用新的 `language`。改语言不用重启 magpie。每轮原文只翻译一次，译成这条规则的语言。译文不会送回工作模型，所以不会再被译成第二种语言。
 
-4. 让工作模型经 magpie 回答一轮。把 magpie 已经在路由的客户端（Codex、Claude Code 或其他客户端）指到 magpie，再问它一句。然后打开 magpie 侧栏里标题为「转述记录」的那一页。还没有命中的回复时，页面上写着还没有译文。命中之后，一行里有 agent、工作模型、翻译模型、语言、耗时和时间。页面上的按钮和说明是中文。译文用的是这一行的 `language`，不是页面外壳的语言。
+4. 让工作模型经 magpie 回答一轮。把 magpie 已经在路由的客户端（Codex、Claude Code 或其他客户端）指到 magpie，再问它一句。然后打开 magpie 侧栏里标题为「翻译记录」的那一页。还没有命中的回复时，页面上写着还没有译文。命中之后，一行里有 agent、工作模型、翻译模型、语言、耗时和时间。页面上的按钮和说明是中文。译文用的是这一行的 `language`，不是页面外壳的语言。
 
 `magpie plugin list` 仍会印 `async gateway hook onRequest`，窗口空闲时写 Waiting for a request。这两句是 magpie 自己的文案。本插件同时导出了 `onResponse`。它不调用 `ctx.report`，那是给往上下文里插内容的插件用的。
 
@@ -74,20 +74,24 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 
 ## magpie 里的设置和记录
 
-设置在插件的 settings 槽。记录在插件自己的侧栏页。两个文件都在 `ui/`。magpie 不允许页面 `fetch`、开 WebSocket，或写内联脚本，所以这两个页面只引用同目录里的脚本。
+设置在插件的 settings 槽（`ui/settings.html`，中文标题「翻译设置」）。记录在插件自己的侧栏页（`ui/history.html`，中文标题「翻译记录」）。两个文件都在 `ui/`，并共用 `ui/style.css` 和 `ui/app.js`。magpie 不允许页面 `fetch`、开 WebSocket、提交表单，或写内联脚本，所以这两个页面只引用同目录里的脚本，包括 `_magpie/bridge.js`。
+
+插件图标文件是 `ui/icon.svg`：靛蓝圆角方块（`#5b5bd6`，带一条同色渐变）加白色翻译标记。笔画是 `#ffffff`，不用 `currentColor`，浅色和深色列表上是同一张图。2026-10-27 在 `#fafafa` 和 `#0b0b0c` 上以 64、20、16 像素打开过。`magpie.icon` 是这张图的 `data:image/svg+xml` URI（1255 字符），解出来与文件逐字相同，用在 Discover 和已安装插件那一行。`magpie.page.icon` 是 `ui/icon.svg`，magpie 收成页面目录里的 `icon.svg`，侧栏入口用它。magpie 的面板结构没有 icon 字段（`internal/plugin/page.go` 的 `PanelSpec` 只有 slot、title、titles、file）。设置槽因此没有单独的图标，标题就是面板标题。这台机器没有 magpie 窗口，所以插件列表、Discover 和侧栏本身没有点开。
 
 工人在这两个页面旁边写两个文件：
 
 - `ui/catalog.js` 是本机网关 `/v1/models` 的模型列表。网关列不出来时改用 `magpie models`。大约每分钟刷新一次。
 - `ui/feed.js` 是页面上的近期记录。不写进 `plugins.json`。options 一变，magpie 就会重载 hook 宿主，所以翻译本身不能去改 options。
 
-`providers:list` 只有 provider 的 id 和名字，没有模型 id。设置里用这些 id 组成 `providerId/*`（这一家现在和以后的模型），翻译模型则从目录里选一个具体 id。列表里没有的 id 仍可以手填。
+`providers:list` 只有 provider 的 id 和名字，没有模型 id。模型选择器把 `catalog.js` 和 `usage:summary` 里的具体 id 按这些 provider 分组。来源规则还可以选「所有模型」或「这一家的全部」（`providerId/*`）。没有手填模型的输入框。规则上已经保存的 id，即使目录还没列出，也会留在选择器里。
 
-保存时调用 `magpie.options.set`，并带上原先的 options，所以 `gatewayKey`、`panelPort`、`magpieBaseUrl`、`gatewayTimeoutMs` 还在。普通保存会丢掉还没处理的 `_compare`。保存会让钩子重载一次。下一条结束的回复用新配置。Bun hook 自己不调用 `magpie.options.set`。
+保存时调用 `magpie.options.set`，并带上原先的 options，所以 `gatewayKey`、`panelPort`、`magpieBaseUrl`、`gatewayTimeoutMs` 还在。普通保存会丢掉还没处理的 `_compare`。保存会让钩子重载一次。下一条结束的回复用新配置。Bun hook 自己不调用 `magpie.options.set`。`options.set` 串行执行，两次之间至少隔 1.1 秒。
 
-记录上的「对照翻译」另选一个翻译模型，并设置一次 `_compare`。工人用存着的原文再译一次，结果叠在同一条上，不新开一条。工人没在跑时，要等下一次被钩住的请求才会开始。页面不能下载文件。导出是把当前筛选放进文本框。
+记录上的「用其他模型对比…」另选一个翻译模型，并设置一次 `_compare`。工人用存着的原文再译一次，结果加在同一条的对照栏，不新开一条，也不再写一次 plugins.json 去清掉 `_compare`。「重新翻译」和「重试」带上 `_compare.replace`，改的是这一条自己的译文。工人没在跑时，要等下一次被钩住的请求才会开始。页面不能下载文件（沙箱没有下载权限）。导出是把 JSON 或 Markdown 复制到剪贴板；剪贴板被拒绝时再试 `document.execCommand("copy")`。
 
-历史在数据目录的 `history.json`。默认留下最近 500 条（`historyLimit`，范围 20–2000）。页面读到的脚本里没有网关钥匙、遮罩后的正文、占位符、提示词和 magpie 地址。
+记录页把段落、列表和代码块排成同一行的格子，各栏一起滚动。宽度不超过 760 像素时，这些栏变成标签。超时和其他失败用真实的错误文字画卡片。记录里没有 token 数，也没有网关请求 id，设计稿上的这两项因此不显示。
+
+历史在数据目录的 `history.json`。默认留下最近 500 条。面板可选 100、500、1000、5000，以及「不保存」（`0`，下一次翻译会把文件清空）。其他正数夹在 20–5000。页面读到的脚本里没有网关钥匙、遮罩后的正文、占位符、提示词和 magpie 地址。脚本里有 `style`，用来显示风格名。
 
 下面这张图是可选的本机设置页，2026-10-27 拍摄，不是 magpie 面板。文件：`docs/panel_settings.png`。
 
@@ -128,7 +132,13 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 | `webhookUrl` | 空 | `display` 含 `webhook` 时使用，须是 http 或 https |
 | `translateTimeoutMs` | `120000` | 一次翻译调用的上限，夹在 10–600 秒。超时、连接中断，或 HTTP 408、429、5xx 会再试一次。其他 4xx 不重试。第二次失败的文字末尾是 `（已重试一次）` |
 | `rewriteSameLanguage` | false | 为 false 时，原文已经是目标语言就不再送去翻译。规则上写了同一个字段就以规则为准。认不出的语言名仍会翻译。认得出的包括简体中文、繁体中文、English、日本語、한국어等。法文和其他拉丁字母语言不会被当成英文 |
-| `historyLimit` | `500` | `history.json` 留下的条数，夹在 20–2000 |
+| `historyLimit` | `500` | `history.json` 留下的条数。`0` 表示不保存，下一次翻译会清空文件。其他数字夹在 20–5000 |
+| `enabled` | true | 页头的开关。`false` 时不再翻译新回复。这不是 magpie 自己的插件停用开关，页面改不了那个。已有记录的对照翻译仍会跑 |
+| `placement` | `beside` | 只影响翻译记录页：`beside` 并排，`below` 原文在下，`only` 只看译文。不改 Agent 会话，会话里仍是原文 |
+| `showTranslatorBadge` | true | 在记录栏上显示翻译模型 id 和耗时 |
+| `collapseOriginal` | false | `below` 时默认折叠原文 |
+
+设置里的提示词框显示一段中文模板，里面有 `{language}`、`{style}`、`{model}`、`{translator}`。不改这个框就保存，`prompt` 仍是空，钩子继续用下面的英文任务句。改过之后，框里的文字会换掉任务句。四张风格卡片把一句英文写进 `style`（直白人话、保留术语、简洁、详细）。超时滑块是 10、20、30、60、90、120 秒。命令行设的更大值会留着，直到你拨动滑块。
 
 默认任务句会把语言名字直接写进去。`language` 为 `English` 时，这一句是：
 
