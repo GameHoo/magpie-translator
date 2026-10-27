@@ -13,9 +13,9 @@ const MAX_ITEMS = 200
 
 export function startPanel(options = {}) {
   const home = options.home || dataDir()
-  const port = options.port ?? Number(process.env.MAGPIE_PLAIN_ZH_PORT || DEFAULT_PANEL_PORT)
-  const startupDisplay = parseDisplay(options.display ?? process.env.MAGPIE_PLAIN_ZH_DISPLAY)
-  const env = { ...process.env, MAGPIE_PLAIN_ZH_HOME: home }
+  const port = options.port ?? Number(process.env.MAGPIE_TRANSLATOR_PORT || DEFAULT_PANEL_PORT)
+  const startupDisplay = parseDisplay(options.display ?? process.env.MAGPIE_TRANSLATOR_DISPLAY)
+  const env = { ...process.env, MAGPIE_TRANSLATOR_HOME: home }
   const state = { items: [], clients: new Set(), inflight: new Set() }
   ensureDir(home)
   ensureDir(inboxDir(env))
@@ -69,7 +69,7 @@ function handle(req, res, env, state) {
     return
   }
   if (req.method === "GET" && url.pathname === "/") return page(res)
-  if (req.method === "GET" && url.pathname === "/health") return sendJson(res, { name: "magpie-plain-zh", ok: true })
+  if (req.method === "GET" && url.pathname === "/health") return sendJson(res, { name: "magpie-translator", ok: true })
   if (req.method === "GET" && url.pathname === "/api/items") return sendJson(res, { items: state.items.map(publicItem) })
   if (req.method === "GET" && url.pathname === "/latest.txt") return sendText(res, latestText(state))
   if (req.method === "GET" && url.pathname === "/events") return events(req, res, state)
@@ -318,7 +318,7 @@ const PAGE = `<!doctype html>
 <header>
   <span class="seal">旁路</span>
   <h1>转述</h1>
-  <p>工作模型的原文会原样回到 Codex、Claude Code 和其他客户端的会话里。这里只展示转述。目标语言、提示词和出口由配置决定，默认是通俗中文。转述不写进下一轮发给原模型的请求。</p>
+  <p>工作模型的原文会原样回到 Codex、Claude Code 和其他客户端的会话里。这里只展示译文。目标语言由 language 决定，默认是简体中文，可以写成 English、日本語、Français 这类任意名字。译文不写进下一轮发给原模型的请求。</p>
 </header>
 <main>
   <div class="empty" id="empty">还没有转述。命中规则的工作模型说完一轮最终回复后，转述会出现在这里。</div>
