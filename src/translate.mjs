@@ -9,7 +9,7 @@ export async function translateJob(job, { fetchImpl = globalThis.fetch, onDelta 
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${job.gatewayKey || DEFAULT_GATEWAY_KEY}`,
-      "user-agent": "magpie-plain-zh/0.1",
+      "user-agent": "magpie-translator/0.1",
     },
     body: JSON.stringify({
       model: job.translator,

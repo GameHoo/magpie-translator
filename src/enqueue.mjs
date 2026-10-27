@@ -14,7 +14,7 @@ export function deliver(job, env = process.env) {
   const tmp = `${file}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(job), { mode: 0o600 })
   fs.renameSync(tmp, file)
-  if (env.MAGPIE_PLAIN_ZH_NO_SPAWN !== "1") ensurePanel(job, env)
+  if (env.MAGPIE_TRANSLATOR_NO_SPAWN !== "1") ensurePanel(job, env)
   return file
 }
 
@@ -32,9 +32,9 @@ function ensurePanel(job, env) {
     stdio: "ignore",
     env: {
       ...env,
-      MAGPIE_PLAIN_ZH_PORT: String(port),
-      MAGPIE_PLAIN_ZH_HOME: home,
-      MAGPIE_PLAIN_ZH_DISPLAY: Array.isArray(job.display) ? job.display.join(",") : "",
+      MAGPIE_TRANSLATOR_PORT: String(port),
+      MAGPIE_TRANSLATOR_HOME: home,
+      MAGPIE_TRANSLATOR_DISPLAY: Array.isArray(job.display) ? job.display.join(",") : "",
     },
   })
   fs.writeSync(fd, String(child.pid))
