@@ -4,6 +4,8 @@ This plugin translates the final reply of a work model with another model you al
 
 The default language is `简体中文`. A rule can override it with `English`, `日本語`, `Français`, or any other name a person would recognize. The default instruction is English and inserts that name. It does not assume the translation is Chinese.
 
+Settings and the translation history live in magpie: a settings panel, and a sidebar page for comparing the original with the translation. The old page at `127.0.0.1:44721` stays off unless `display` includes `panel` or `localPanel` is true. `npm test` is 48 tests, last run on 2026-10-27. No Codex app and no magpie window were opened in that run.
+
 中文说明：[README.zh-CN.md](README.zh-CN.md)。设计取舍和核验记录：[docs/DESIGN.md](docs/DESIGN.md)。核验日期 2026-10-27。
 
 ## Install and write one rule
@@ -27,14 +29,16 @@ You need a local magpie that is already running, at version 0.1.1273 or later, a
 
    A local checkout works the same way: `magpie plugin add /path/to/magpie-translator`. The name is then that path.
 
-3. Write the rules. `translator` is an id from step 1. `model` can be one of those ids, or a prefix that ends with `*`. The next section says how a prefix matches. An empty `rules` array translates nothing. This example translates matching work models into English, and Claude models into Japanese. `gpt-5*` and `claude-*` are prefixes, not lines copied from `magpie models`:
+3. Write the rules. `translator` is an id from step 1. `model` can be one of those ids, or a glob: `*` matches any stretch, anywhere in the id, and the match ignores case. The next section has examples. An empty `rules` array translates nothing. This example translates matching work models into English, and Claude models into Japanese. `gpt-5*` and `claude-*` are globs, not lines copied from `magpie models`. `display` here is only the log. The history you read is the magpie sidebar page, which is written even when `panel` is off:
 
    ```bash
    magpie plugin options <name> '{
      "language": "English",
      "style": "Use short sentences.",
-     "display": ["panel", "log"],
-     "panelPort": 44721,
+     "display": ["log"],
+     "translateTimeoutMs": 120000,
+     "rewriteSameLanguage": false,
+     "historyLimit": 500,
      "rules": [
        { "model": "gpt-5*", "translator": "deepseek/deepseek-chat" },
        { "model": "claude-*", "translator": "gemini/gemini-2.5-flash", "language": "日本語" }
@@ -50,9 +54,11 @@ You need a local magpie that is already running, at version 0.1.1273 or later, a
 
    The JSON you pass to `plugin options` replaces the plugin's options. It does not merge with the previous JSON. The next finished reply uses the new `language`. You do not restart magpie for that change. Each reply is translated once, from the original into that rule's language. The translation is not sent back to the work model, so it is not translated again into a second language.
 
-4. Let the work model answer one turn through magpie. Point the client magpie already routes (Codex, Claude Code, or another client) at magpie, then ask it something. Open <http://127.0.0.1:44721>. Before any matching reply, the page says there is no translation yet. After one, the card shows the language, work model, and translator from that turn. The page chrome is Chinese. The language of the translation is the `language` on the card, not the language of the chrome.
+4. Let the work model answer one turn through magpie. Point the client magpie already routes (Codex, Claude Code, or another client) at magpie, then ask it something. Open magpie's sidebar page titled Translations (中文标题是「转述记录」). Before any matching reply, the page says there is no translation yet. After one, the row shows the agent, work model, translator, language, latency, and time. The page chrome is Chinese. The language of the translation is the `language` on the row, not the language of the chrome.
 
-The two pictures below are that page in a 1440-pixel-wide window, taken on 2026-10-27 from `npm run demo`. Headings and buttons stay Chinese. The language line on each card is that turn's `language`. In these pictures it is `简体中文`. The footer shows port 44751 because that run set `MAGPIE_TRANSLATOR_PORT`. With no port set, `npm run demo` uses 44721.
+`magpie plugin list` still prints `async gateway hook onRequest`, and the hook row in the window says it is waiting for a request. Those two lines are magpie's own labels. This plugin does export `onResponse`. It does not call `ctx.report`, because that status is for plugins that inject context.
+
+The two pictures below are the optional localhost page, not the magpie sidebar. They were taken on 2026-10-27 from `npm run demo`, in a 1440-pixel-wide window. Headings and buttons stay Chinese. The language line on each card is that turn's `language`. In these pictures it is `简体中文`. The footer shows port 44751 because that run set `MAGPIE_TRANSLATOR_PORT`. With no port set, `npm run demo` uses 44721. `npm run demo` turns the localhost page on for that run. A normal install leaves it off.
 
 A finished card keeps fenced commands in their original form. File: `docs/panel_success.png`.
 
@@ -66,17 +72,28 @@ A card whose translator cannot be reached keeps the original sentence and shows 
 
 `magpie.options` inside `package.json` is only an example. The live config is what `magpie plugin options` writes.
 
-## Settings page
+## Settings and history inside magpie
 
-Open <http://127.0.0.1:44721/settings> (or the port in `panelPort`). The form edits the same `plugins.json` entry as `magpie plugin options`. Saving writes that entry and leaves every other plugin alone. A magpie that is already running reads the new file on the next request. You do not restart it. A reply that has already started keeps the old options.
+The settings panel is the plugin's settings slot. The history page is the plugin's own sidebar tab. Both files are under `ui/`. Magpie does not allow a page to call `fetch`, open a WebSocket, or use an inline script, so both pages load scripts from that folder.
 
-You can set the global language, prompt, style, and display, and you can add, edit, delete, and reorder rules. Pick a translator from the model list magpie reports, or type an id that is not in the list. The prompt box is multiple lines. 恢复默认 clears it; an empty prompt uses the default task sentence. `gatewayKey`, `panelPort`, `magpieBaseUrl`, and `gatewayTimeoutMs` are not on the form. Saving keeps the values already stored.
+The worker writes two files next to those pages:
 
-The page listens on 127.0.0.1 only. This page can save. A page at any other address cannot. The picture below is that page in a 1440-pixel-wide window, taken on 2026-10-27. File: `docs/panel_settings.png`.
+- `ui/catalog.js` is the model list from the local gateway's `/v1/models`, or from `magpie models` if the gateway list is empty. It refreshes about once a minute.
+- `ui/feed.js` is the recent history the page shows. It is not written into `plugins.json`. Writing options reloads magpie's hook host, so a translation must not do that.
+
+`providers:list` returns provider ids and names, not model ids. The settings panel uses those ids as `providerId/*` (every model from that provider, including ones added later) and uses the catalog for a concrete translator id. You can still type an id that is not listed.
+
+Saving settings calls `magpie.options.set` with the previous options merged in, so `gatewayKey`, `panelPort`, `magpieBaseUrl`, and `gatewayTimeoutMs` stay. A normal save drops a pending `_compare`. Saving reloads the hook host once. The next finished reply uses the new options. The Bun hook itself does not call `magpie.options.set`.
+
+On a history row, 对照翻译 picks another translator and sets `_compare` once. The worker translates the stored original again and stacks that result on the same row. It does not start a new card. If the worker is not running, the compare waits until the next hooked request. The page cannot download a file. Export puts the filtered rows in a text box.
+
+History is `history.json` in the data directory. The default cap is the last 500 rows (`historyLimit`, from 20 to 2000). The script the page loads omits the gateway key, the masked text, the placeholders, the prompt, and the magpie address.
+
+The picture below is the optional localhost settings page, taken on 2026-10-27. It is not the magpie panel. File: `docs/panel_settings.png`.
 
 ![Settings page. Global language is English, the prompt contains {language}, and two rules list a translator, a model pattern, and a per-rule language.](docs/panel_settings.png)
 
-How the file is chosen, and why the hook does not call `magpie.options.set`, is in [docs/DESIGN.md](docs/DESIGN.md).
+The localhost page is off by default. Turn it on with `"localPanel": true` or by putting `panel` in `display`, then open <http://127.0.0.1:44721/settings> (or `panelPort`). It edits the same `plugins.json` entry and listens on 127.0.0.1 only. A field that form does not send is left as it was, so an older form does not wipe the timeout or the history cap. How the file is chosen is in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## How a rule matches
 
@@ -86,8 +103,10 @@ Rules are tried in the order you write them. The first hit wins.
 | --- | --- |
 | omit `agent` | every client |
 | omit `model` | every model |
-| `"model": "gpt-5.4"` | `gpt-5.4` and `openai/gpt-5.4`. It does not match `gpt-5.4-mini` |
+| `"model": "gpt-5.4"` | `gpt-5.4` and `openai/gpt-5.4`, in any case. It does not match `gpt-5.4-mini` |
 | `"model": "gpt-5*"` | a full id, or the last segment, that starts with `gpt-5` |
+| `"model": "*gpt*"` | `*` anywhere. `acme/foo-gpt-bar` matches. `?` stays a literal question mark |
+| `"model": "deepseek/*"` | every model whose full id starts with that provider. The bare name alone does not match |
 | `"agent": "codex"` | the whole word, case-insensitive |
 
 `agent` must be the name shown on the panel card. To pin one client, first match on `model` only, read the name on the card, then add `agent`.
@@ -103,9 +122,13 @@ Vendor API keys stay in `magpie provider`. Leave `gatewayKey` unset unless your 
 | `language` | `简体中文` | The language name inserted into the default prompt. Any name works, such as `English`, `日本語`, or `Français` |
 | `prompt` | empty | Replaces only the task sentence, up to 4000 characters. A custom sentence may contain `{language}`, `{style}`, `{model}`, and `{translator}`. They are replaced once, when the translator request is built. Any other `{token}` stays as written. Three pieces stay: an internal marker so the plugin does not translate its own request, the placeholder rule, and "Output only the rewritten text." |
 | `style` | empty | One extra line about tone, up to 4000 characters |
-| `display` | `panel,log` | See the next table |
-| `panelPort` | `44721` | Page port. Listens on 127.0.0.1 only |
+| `display` | `log` | See the next table. This does not turn the magpie history page off |
+| `panelPort` | `44721` | Localhost page port, used only when that page is on. Listens on 127.0.0.1 only |
+| `localPanel` | false | Open the localhost page even when `display` has no `panel` |
 | `webhookUrl` | empty | Used when `display` includes `webhook`. Must be http or https |
+| `translateTimeoutMs` | `120000` | One translator call. Clamped to 10–600 seconds. A timeout, a dropped connection, or HTTP 408, 429, or 5xx is tried once more. Other 4xx errors are not. The second failure says `（已重试一次）` |
+| `rewriteSameLanguage` | false | When false, prose that is already in the target language is not sent. A rule can set the same field to override this. Unknown language names are still translated. Recognized names include 简体中文, 繁体中文, English, 日本語, 한국어, and a few others. French and other Latin languages are not treated as English |
+| `historyLimit` | `500` | How many rows `history.json` keeps. Clamped to 20–2000 |
 
 The default task sentence, with the language name already filled in, is:
 
@@ -130,7 +153,7 @@ These two lines are always kept:
 
 Change the data directory with `MAGPIE_TRANSLATOR_HOME` or `XDG_DATA_HOME`. The default is `~/.local/share/magpie-translator`.
 
-After you change `panelPort`, stop the process recorded in `panel.pid` in that directory. The next reply starts a worker on the new port. Changing only `display` applies to the next job. Adding `panel` opens the page if it was not listening.
+After you change `panelPort`, stop the process recorded in `panel.pid` in that directory. The next reply starts a worker on the new port. A worker started by the hook listens only when that job's `display` includes `panel`, or `localPanel` is true. Running `node src/panel.mjs` yourself, with no `MAGPIE_TRANSLATOR_DISPLAY`, opens the page.
 
 If the page does not open, run this as the same user, from the directory that contains `src/panel.mjs`:
 
@@ -142,13 +165,25 @@ For a path install, `magpie plugin list` prints that directory. A github install
 
 ## What gets translated
 
-Only the final prose a person is meant to read. Tool calls, reasoning, and thinking blocks are left out. Magpie labels each request with one of four JSON shapes: `chat`, `responses`, `anthropic`, or `gemini`. Codex usually uses `responses`. Claude Code uses `anthropic`. A typical chat app uses `chat`. When a turn contains a tool call, `anthropic`, `chat`, and `gemini` turns are skipped entirely. A `responses` turn that contains a tool call keeps only text whose `phase` is `final_answer`. A `responses` turn with no tool call is translated even when the text has no `phase`. Commentary is skipped.
+Only the final prose a person is meant to read. Tool calls, reasoning, and thinking blocks are left out. Magpie labels each request with one of four JSON shapes: `chat`, `responses`, `anthropic`, or `gemini`. Codex usually uses `responses`. Claude Code uses `anthropic`. A typical chat app uses `chat`.
+
+These replies are not translated:
+
+- The whole reply is JSON, including a single ` ```json ` fence. Codex title and suggestion helpers look like this.
+- The request asks for structured output (`response_format`, `text.format`, Gemini `responseMimeType: application/json`, or a schema).
+- The request is a title, summary, suggestion, or description helper (metadata such as `thread_title`, a schema name, or a short instruction that says so).
+- The request has a conversation shape but no user turn. A body that is only `{ "model": "..." }` is not skipped for that reason.
+- The prose is already in the target language, and `rewriteSameLanguage` is off.
+
+When a turn contains a tool call, `anthropic`, `chat`, and `gemini` turns are skipped entirely. A `responses` turn keeps text marked `final_answer` when any text has that phase. Otherwise, if there is no tool call, it keeps the non-commentary text even when `phase` is missing. If there is a tool call, it keeps only text that comes after the last tool. Commentary before a tool stays out. A Codex main answer is often a `reasoning` item followed by a `message` with no `phase`. That message is captured.
+
+On magpie's agent route, `src/middleware.mjs` copies assistant text from `response.output_text.delta` and `response.output_item.done` onto `response.completed` when that event's `output` has no assistant text. Codex's own ChatGPT sign-in path runs the async hook and does not run this middleware. If that path's `response.completed` omits the output entirely, the plugin never sees the main answer. This was not checked against a live Codex session.
 
 Fenced code, an unclosed fence, inline code, and lines that start with `$ ` are replaced with placeholders before the translator sees them, then restored. Placeholders the translator drops are appended at the end. Slots that were restored are not repeated. A turn that is only code is not sent. After masking, text longer than 20000 characters is cut at character 20000. The page marks that cut.
 
 Translation runs after the turn finishes. The agent sees the original first. The translation shows up on the sinks afterward. The live stream is not rewritten.
 
-The original flow continues in every failure case. If the hook cannot write the job to disk, the inbox has no record and the page and log do not show it. If the translator request fails or returns no text, the page and the log keep the original plus the error.
+The original flow continues in every failure case. If the hook cannot write the job to disk, the inbox has no record and the page and log do not show it. If the translator request fails or returns no text, the history and the log keep the original plus the error. The call waits `translateTimeoutMs` (default 120 seconds) and retries once on a timeout or a 5xx.
 
 ## Why the next request has no translation
 
