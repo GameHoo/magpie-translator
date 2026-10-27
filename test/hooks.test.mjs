@@ -4,7 +4,8 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { MARKER } from "../src/constants.mjs"
-import { onRequest, onResponse } from "../src/hooks.mjs"
+import { noteCompare, onRequest, onResponse } from "../src/hooks.mjs"
+import { recordTranslation } from "../src/history.mjs"
 import { systemPrompt } from "../src/prompt.mjs"
 
 function tempHome() {
@@ -123,6 +124,37 @@ test("原文已经是目标语言时默认跳过，打开改写后仍入队", as
     options: { language: "简体中文", rewriteSameLanguage: true, rules: [{ translator: "mock/zh" }] },
   })
   assert.equal(jobs(home).length, 1)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("enabled 为 false 时不入队", async () => {
+  const home = tempHome()
+  const reply = { choices: [{ message: { role: "assistant", content: "The cache invalidates when the file mtime changes." }, finish_reason: "stop" }] }
+  await onResponse(reply, {
+    success: true,
+    protocol: "chat",
+    agent: "codex",
+    model: "gpt-5.4",
+    request: { model: "gpt-5.4", messages: [{ role: "user", content: "explain" }] },
+    state: {},
+    options: { enabled: false, rules: [{ translator: "mock/zh" }] },
+  })
+  assert.equal(jobs(home).length, 0)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("对照请求入队一次，重试带上 replace", () => {
+  const home = tempHome()
+  const env = { ...process.env, MAGPIE_TRANSLATOR_HOME: home, MAGPIE_TRANSLATOR_NO_SPAWN: "1" }
+  recordTranslation({ id: "row-1", original: "Hello there from the model.", translation: "你好", translator: "mock/zh" }, env, 20)
+  noteCompare({ _compare: { nonce: "n1", entryId: "row-1", translator: "other/model", replace: true }, gatewayKey: "secret-key" }, env)
+  noteCompare({ _compare: { nonce: "n1", entryId: "row-1", translator: "other/model", replace: true }, gatewayKey: "secret-key" }, env)
+  const queued = jobs(home)
+  assert.equal(queued.length, 1)
+  assert.equal(queued[0].kind, "compare")
+  assert.equal(queued[0].replace, true)
+  assert.equal(queued[0].translator, "other/model")
+  assert.equal(JSON.stringify(queued[0]).includes("secret-key"), true)
   fs.rmSync(home, { recursive: true, force: true })
 })
 
