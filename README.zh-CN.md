@@ -4,6 +4,8 @@
 
 不写 `language` 时，默认是 `简体中文`。一条规则可以改成 `English`、`日本語`、`Français`，或任何一个人读得懂的名字。默认提示词是英文指令，把这个名字嵌进去，不假设译文必须是中文。
 
+设置和转述记录都在 magpie 里：设置面板，以及用来对照原文和译文的侧栏页。`127.0.0.1:44721` 默认不开，除非 `display` 里有 `panel`，或 `localPanel` 为 true。`npm test` 是 48 项，最近一次在 2026-10-27 跑过。那次没有打开 Codex，也没有打开 magpie 的窗口。
+
 English: [README.md](README.md). Design notes and the checks that were run: [docs/DESIGN.md](docs/DESIGN.md). Checked on 2026-10-27.
 
 ## 装上并写一条规则
@@ -27,14 +29,16 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 
    本地目录同样可以：`magpie plugin add /path/to/magpie-translator`。这时名字就是那条路径。
 
-3. 写规则。`translator` 用第 1 步的 id。`model` 可以是那条 id，也可以是末尾加 `*` 的前缀。下一节说明前缀怎么匹配。`rules` 为空时什么都不翻译。下面的例子把命中的工作模型译成英文，把 Claude 译成日文。`gpt-5*` 和 `claude-*` 是前缀，不是从 `magpie models` 原样抄下来的一行：
+3. 写规则。`translator` 用第 1 步的 id。`model` 可以是那条 id，也可以是带 `*` 的式样：`*` 能出现在任意位置，匹配不区分大小写。下一节有例子。`rules` 为空时什么都不翻译。下面的例子把命中的工作模型译成英文，把 Claude 译成日文。`gpt-5*` 和 `claude-*` 是式样，不是从 `magpie models` 原样抄下来的一行。这里的 `display` 只有日志。要看的记录在 magpie 侧栏，不依赖本机网页：
 
    ```bash
    magpie plugin options <名字> '{
      "language": "English",
      "style": "Use short sentences.",
-     "display": ["panel", "log"],
-     "panelPort": 44721,
+     "display": ["log"],
+     "translateTimeoutMs": 120000,
+     "rewriteSameLanguage": false,
+     "historyLimit": 500,
      "rules": [
        { "model": "gpt-5*", "translator": "deepseek/deepseek-chat" },
        { "model": "claude-*", "translator": "gemini/gemini-2.5-flash", "language": "日本語" }
@@ -50,9 +54,11 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 
    交给 `plugin options` 的 JSON 会整份替换插件配置，不会和上一份合并。下一轮结束的回复使用新的 `language`。改语言不用重启 magpie。每轮原文只翻译一次，译成这条规则的语言。译文不会送回工作模型，所以不会再被译成第二种语言。
 
-4. 让工作模型经 magpie 回答一轮。把 magpie 已经在路由的客户端（Codex、Claude Code 或其他客户端）指到 magpie，再问它一句。然后打开 <http://127.0.0.1:44721>。还没有命中的回复时，页面上写着还没有译文。命中之后，卡片上的语言、工作模型和翻译模型来自这一轮的配置。页面上的按钮和说明是中文。译文用的是卡片上的 `language`，不是页面外壳的语言。
+4. 让工作模型经 magpie 回答一轮。把 magpie 已经在路由的客户端（Codex、Claude Code 或其他客户端）指到 magpie，再问它一句。然后打开 magpie 侧栏里标题为「转述记录」的那一页。还没有命中的回复时，页面上写着还没有译文。命中之后，一行里有 agent、工作模型、翻译模型、语言、耗时和时间。页面上的按钮和说明是中文。译文用的是这一行的 `language`，不是页面外壳的语言。
 
-下面两张图是 2026-10-27 用 `npm run demo` 打开的页面，窗口宽 1440 像素。标题和按钮是中文。卡片上的语言行是这一轮的 `language`，这两张图里是 `简体中文`。图脚的端口是 44751，因为那次运行设置了 `MAGPIE_TRANSLATOR_PORT`。不设端口时，`npm run demo` 用 44721。
+`magpie plugin list` 仍会印 `async gateway hook onRequest`，窗口空闲时写 Waiting for a request。这两句是 magpie 自己的文案。本插件同时导出了 `onResponse`。它不调用 `ctx.report`，那是给往上下文里插内容的插件用的。
+
+下面两张图是可选的本机页面，不是 magpie 侧栏。2026-10-27 用 `npm run demo` 打开，窗口宽 1440 像素。标题和按钮是中文。卡片上的语言行是这一轮的 `language`，这两张图里是 `简体中文`。图脚的端口是 44751，因为那次运行设置了 `MAGPIE_TRANSLATOR_PORT`。不设端口时，`npm run demo` 用 44721。`npm run demo` 会为那一次打开本机页面。正常安装默认不开。
 
 翻译完成时，围栏里的命令保持原样。文件：`docs/panel_success.png`。
 
@@ -66,17 +72,28 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 
 `package.json` 里的 `magpie.options` 只是示例。生效的是 `magpie plugin options` 写进去的那份。
 
-## 设置页
+## magpie 里的设置和记录
 
-打开 <http://127.0.0.1:44721/settings>（端口以 `panelPort` 为准）。这个表单改的是 `plugins.json` 里本插件的那一条，和 `magpie plugin options` 同一份。保存只动这一条，别的插件不动。已经在跑的 magpie 会在下一轮请求读到新文件，不用重启。已经开始的那一轮仍用旧配置。
+设置在插件的 settings 槽。记录在插件自己的侧栏页。两个文件都在 `ui/`。magpie 不允许页面 `fetch`、开 WebSocket，或写内联脚本，所以这两个页面只引用同目录里的脚本。
 
-可以改全局的语言、提示词、style 和展示方式，也可以添加、修改、删除、调整规则顺序。翻译模型从 magpie 列出的 id 里选，也可以手填一个列表里没有的 id。提示词是多行的。点「恢复默认」会清空那一栏；空着就用默认任务句。`gatewayKey`、`panelPort`、`magpieBaseUrl`、`gatewayTimeoutMs` 不在表单上，保存时按已经存着的值留下。
+工人在这两个页面旁边写两个文件：
 
-页面只监听 127.0.0.1。只有这个设置页自己能保存。别的地址上的页面不能。下面这张图是 2026-10-27 的设置页，窗口宽 1440 像素。文件：`docs/panel_settings.png`。
+- `ui/catalog.js` 是本机网关 `/v1/models` 的模型列表。网关列不出来时改用 `magpie models`。大约每分钟刷新一次。
+- `ui/feed.js` 是页面上的近期记录。不写进 `plugins.json`。options 一变，magpie 就会重载 hook 宿主，所以翻译本身不能去改 options。
+
+`providers:list` 只有 provider 的 id 和名字，没有模型 id。设置里用这些 id 组成 `providerId/*`（这一家现在和以后的模型），翻译模型则从目录里选一个具体 id。列表里没有的 id 仍可以手填。
+
+保存时调用 `magpie.options.set`，并带上原先的 options，所以 `gatewayKey`、`panelPort`、`magpieBaseUrl`、`gatewayTimeoutMs` 还在。普通保存会丢掉还没处理的 `_compare`。保存会让钩子重载一次。下一条结束的回复用新配置。Bun hook 自己不调用 `magpie.options.set`。
+
+记录上的「对照翻译」另选一个翻译模型，并设置一次 `_compare`。工人用存着的原文再译一次，结果叠在同一条上，不新开一条。工人没在跑时，要等下一次被钩住的请求才会开始。页面不能下载文件。导出是把当前筛选放进文本框。
+
+历史在数据目录的 `history.json`。默认留下最近 500 条（`historyLimit`，范围 20–2000）。页面读到的脚本里没有网关钥匙、遮罩后的正文、占位符、提示词和 magpie 地址。
+
+下面这张图是可选的本机设置页，2026-10-27 拍摄，不是 magpie 面板。文件：`docs/panel_settings.png`。
 
 ![设置页。全局语言是 English，提示词里有 {language}，两条规则分别写了翻译模型、模型匹配和单独的目标语言。](docs/panel_settings.png)
 
-文件怎么对上这条插件，以及为什么 hook 不调用 `magpie.options.set`，写在 [docs/DESIGN.md](docs/DESIGN.md)。
+本机页面默认关。`"localPanel": true`，或 `display` 里加上 `panel`，然后打开 <http://127.0.0.1:44721/settings>（端口以 `panelPort` 为准）。它改的是同一条 `plugins.json`，只监听 127.0.0.1。表单没提交的字段按原值留下，所以旧表单不会清掉超时和历史条数。文件怎么对上这条插件，写在 [docs/DESIGN.md](docs/DESIGN.md)。
 
 ## 规则怎么匹配
 
@@ -86,8 +103,10 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 | --- | --- |
 | 省略 `agent` | 所有客户端 |
 | 省略 `model` | 所有模型 |
-| `"model": "gpt-5.4"` | `gpt-5.4` 和 `openai/gpt-5.4`。不命中 `gpt-5.4-mini` |
+| `"model": "gpt-5.4"` | `gpt-5.4` 和 `openai/gpt-5.4`，不区分大小写。不命中 `gpt-5.4-mini` |
 | `"model": "gpt-5*"` | 完整 id 或最后一段以 `gpt-5` 开头 |
+| `"model": "*gpt*"` | `*` 可以在任意位置。`acme/foo-gpt-bar` 命中。`?` 仍是字面量 |
+| `"model": "deepseek/*"` | 完整 id 以这家 provider 开头的模型。只写最后一段对不上 |
 | `"agent": "codex"` | 整词，不区分大小写 |
 
 `agent` 要和页面卡片上显示的名字一致。限定某个客户端之前，可以先只写 `model`，看卡片上的名字，再补上 `agent`。
@@ -103,9 +122,13 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 | `language` | `简体中文` | 嵌进默认提示词的语言名。任意名字都可以，如 `English`、`日本語`、`Français` |
 | `prompt` | 空 | 只换掉任务句，最长 4000 字。自定义句子里可以写 `{language}`、`{style}`、`{model}`、`{translator}`，发给翻译模型前替换一次。不认识的 `{token}` 原样留下。三样仍在：用来避免翻译请求再被翻译的内部记号、占位符规则、`Output only the rewritten text.` |
 | `style` | 空 | 追加一句口气，最长 4000 字 |
-| `display` | `panel,log` | 见下表 |
-| `panelPort` | `44721` | 页面端口，只监听 127.0.0.1 |
+| `display` | `log` | 见下表。这不关掉 magpie 里的记录页 |
+| `panelPort` | `44721` | 本机页面的端口，只有打开本机页面时才监听，且只监听 127.0.0.1 |
+| `localPanel` | false | `display` 里没有 `panel` 时也打开本机页面 |
 | `webhookUrl` | 空 | `display` 含 `webhook` 时使用，须是 http 或 https |
+| `translateTimeoutMs` | `120000` | 一次翻译调用的上限，夹在 10–600 秒。超时、连接中断，或 HTTP 408、429、5xx 会再试一次。其他 4xx 不重试。第二次失败的文字末尾是 `（已重试一次）` |
+| `rewriteSameLanguage` | false | 为 false 时，原文已经是目标语言就不再送去翻译。规则上写了同一个字段就以规则为准。认不出的语言名仍会翻译。认得出的包括简体中文、繁体中文、English、日本語、한국어等。法文和其他拉丁字母语言不会被当成英文 |
+| `historyLimit` | `500` | `history.json` 留下的条数，夹在 20–2000 |
 
 默认任务句会把语言名字直接写进去。`language` 为 `English` 时，这一句是：
 
@@ -130,7 +153,7 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 
 数据目录可以用 `MAGPIE_TRANSLATOR_HOME` 或 `XDG_DATA_HOME` 改。默认是 `~/.local/share/magpie-translator`。
 
-改了 `panelPort` 之后，结束该目录 `panel.pid` 里的进程，下一轮回复会按新端口拉起。只改 `display` 时，已经在跑的工人会按新任务的出口送出；加上 `panel` 时它会补开页面。
+改了 `panelPort` 之后，结束该目录 `panel.pid` 里的进程，下一轮回复会按新端口拉起。hook 拉起的工人只有在该任务的 `display` 含 `panel`，或 `localPanel` 为 true 时才监听。自己运行 `node src/panel.mjs`、且没有设置 `MAGPIE_TRANSLATOR_DISPLAY` 时，会打开页面。
 
 页面打不开时，在含有 `src/panel.mjs` 的目录里、用同一个用户执行：
 
@@ -142,13 +165,25 @@ node src/panel.mjs
 
 ## 哪些字会送去翻译
 
-只送面向用户的最终正文。工具调用、推理、思考块不送。magpie 给每个请求标四种 JSON 形状之一：`chat`、`responses`、`anthropic`、`gemini`。Codex 通常是 `responses`。Claude Code 是 `anthropic`。普通聊天应用是 `chat`。有工具调用时，`anthropic`、`chat`、`gemini` 整段不送。`responses` 这一轮里有工具调用时，只保留 `phase` 为 `final_answer` 的正文。这一轮没有工具调用时，即使正文没有 `phase` 也会送去翻译。铺垫句不送。
+只送面向用户的最终正文。工具调用、推理、思考块不送。magpie 给每个请求标四种 JSON 形状之一：`chat`、`responses`、`anthropic`、`gemini`。Codex 通常是 `responses`。Claude Code 是 `anthropic`。普通聊天应用是 `chat`。
+
+下面这些不翻译：
+
+- 整段回复就是 JSON，包括单独一层 ` ```json ` 围栏。Codex 的标题和建议助手就是这种形状。
+- 请求要求结构化输出（`response_format`、`text.format`、Gemini 的 `responseMimeType: application/json`，或带 schema）。
+- 请求是标题、摘要、建议或描述助手（例如 metadata 里的 `thread_title`、schema 名字，或一句很短的同类说明）。
+- 请求有对话的形状，但没有用户轮次。只有 `{ "model": "..." }` 的请求不会因此被跳过。
+- 原文已经是目标语言，且 `rewriteSameLanguage` 为关。
+
+有工具调用时，`anthropic`、`chat`、`gemini` 整段不送。`responses` 里只要有正文标了 `final_answer`，就只用那些。否则，没有工具调用时，留下非铺垫正文，即使没有 `phase`。有工具调用时，只留下最后一个工具调用之后的正文。工具前面的铺垫句不送。Codex 的主回复常常是一条 `reasoning` 再加一条没有 `phase` 的 `message`。这条 message 会留下。
+
+在 magpie 的 agent 路径上，`src/middleware.mjs` 会在 `response.completed` 的 `output` 没有助手正文时，把 `response.output_text.delta` 和 `response.output_item.done` 里已经拼好的正文补上去。Codex 自己的 ChatGPT 登录透传会跑异步 hook，不跑这段中间件。若那条路径上的 `response.completed` 完全不带 output，插件看不到主回复。这没有在一次真实的 Codex 会话里核对过。
 
 围栏代码、没合上的代码围栏、行内代码、以 `$ ` 开头的命令行会换成占位符再送。译文回来后按原样嵌回。翻译模型弄丢的那几段补在末尾，已经嵌回的不重复。整段都是代码时不发送。遮罩后超过 20000 个字符时从第 20000 个字符处截断，不找段落边界，页面会标明截断。
 
 翻译在这一轮结束之后进行。agent 里先出现原文，译文随后出现在出口上。流式输出不会被改写。
 
-agent 的原流程在这些情况下都照常。hook 写盘失败时，收件箱里没有这条，页面和日志也不会出现它。翻译请求失败或翻译模型没有返回文字时，页面和日志留下原文和错误原因。
+agent 的原流程在这些情况下都照常。hook 写盘失败时，收件箱里没有这条，记录和日志也不会出现它。翻译请求失败或翻译模型没有返回文字时，记录和日志留下原文和错误原因。单次等待 `translateTimeoutMs`（默认 120 秒），超时或 5xx 再试一次。
 
 ## 为什么下一轮没有译文
 
