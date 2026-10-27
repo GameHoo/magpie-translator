@@ -277,10 +277,8 @@ a.btn { text-decoration: none; color: inherit; }
 .settings { max-width: 860px; margin: 0 auto; padding: var(--s6) var(--s6) 0; }
 .plugin-hero { display: flex; align-items: center; gap: var(--s4); padding: var(--s5); margin-bottom: var(--s6);
   background: radial-gradient(120% 140% at 0% 0%, var(--accent-soft), transparent 55%), var(--card); }
-.plugin-hero .logo { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; flex: none;
-  background: linear-gradient(140deg, #7b7bf0, #5b5bd6 55%, #4646b8); color: #fff;
-  box-shadow: 0 4px 12px -2px rgba(91,91,214,.45), inset 0 1px 0 rgba(255,255,255,.25); }
-.plugin-hero .logo svg { width: 24px; height: 24px; stroke-width: 1.8; }
+.plugin-hero .logo { width: 44px; height: 44px; border-radius: 10px; flex: none; display: block;
+  box-shadow: 0 4px 12px -2px rgba(91,91,214,.35), 0 0 0 1px rgba(91,91,214,.12); }
 .plugin-hero h1 { margin: 0; font-size: var(--t-lg); font-weight: 650; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; }
 .plugin-hero h1 .ver { font: 500 11px/1 var(--mono); color: var(--muted); padding: 3px 6px; border-radius: 5px; background: var(--hover); }
 .plugin-hero p { margin: 3px 0 0; color: var(--muted); font-size: var(--t-sm); max-width: 520px; }
