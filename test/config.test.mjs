@@ -1,0 +1,171 @@
+import assert from "node:assert/strict"
+import fs from "node:fs"
+import http from "node:http"
+import os from "node:os"
+import path from "node:path"
+import test from "node:test"
+import { parseDisplay, presentation } from "../src/config.mjs"
+import { MARKER } from "../src/constants.mjs"
+import { onResponse } from "../src/hooks.mjs"
+import { startPanel } from "../src/panel.mjs"
+import { systemPrompt } from "../src/prompt.mjs"
+import { translateJob } from "../src/translate.mjs"
+
+test("默认提示词带上目标语言，自定义提示词换掉任务句", () => {
+  const fallback = systemPrompt({ language: "日本語" })
+  assert.match(fallback, /日本語/)
+  assert.match(fallback, new RegExp(MARKER))
+  assert.match(fallback, /⟦0⟧/)
+
+  const custom = systemPrompt({ prompt: "用我的口吻解释", language: "English", style: "短句。" })
+  assert.match(custom, /用我的口吻解释/)
+  assert.match(custom, /短句。/)
+  assert.equal(custom.includes("通俗易懂的English"), false)
+  assert.match(custom, new RegExp(MARKER))
+  assert.match(custom, /⟦0⟧/)
+})
+
+test("展示出口认别名，不认识的名字退回默认", () => {
+  assert.deepEqual(parseDisplay("file, notify"), ["file", "notify"])
+  assert.deepEqual(parseDisplay(["webhook", "nope", "webhook"]), ["webhook"])
+  assert.deepEqual(parseDisplay(undefined), ["panel", "log"])
+  assert.deepEqual(parseDisplay(["not-a-sink"]), ["panel", "log"])
+})
+
+test("规则上的语言、提示词、展示和翻译模型盖过全局", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "plain-zh-cfg-"))
+  process.env.MAGPIE_PLAIN_ZH_HOME = home
+  process.env.MAGPIE_PLAIN_ZH_NO_SPAWN = "1"
+  const reply = { choices: [{ message: { role: "assistant", content: "Hello from any model." }, finish_reason: "stop" }] }
+  await onResponse(reply, {
+    success: true,
+    protocol: "chat",
+    model: "any-vendor/some-model",
+    request: { model: "any-vendor/some-model" },
+    state: {},
+    options: {
+      language: "简体中文",
+      prompt: "全局提示",
+      display: ["log"],
+      webhookUrl: "http://127.0.0.1/global",
+      rules: [{
+        translator: "plugin-grok/grok-4",
+        language: "English",
+        prompt: "rule prompt",
+        style: "short",
+        display: ["file", "webhook"],
+        webhookUrl: "http://127.0.0.1:9/hook",
+      }],
+    },
+  })
+  const [job] = fs.readdirSync(path.join(home, "inbox")).map((name) => JSON.parse(fs.readFileSync(path.join(home, "inbox", name), "utf8")))
+  assert.equal(job.model, "any-vendor/some-model")
+  assert.equal(job.translator, "plugin-grok/grok-4")
+  assert.equal(job.language, "English")
+  assert.equal(job.prompt, "rule prompt")
+  assert.equal(job.style, "short")
+  assert.deepEqual(job.display, ["file", "webhook"])
+  assert.equal(job.webhookUrl, "http://127.0.0.1:9/hook")
+  assert.equal(presentation({}, {}).language, "简体中文")
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("翻译请求原样使用配置里的模型 id", async () => {
+  let seen
+  const text = await translateJob({
+    translator: "community/brand-new-model",
+    language: "日本語",
+    prompt: "",
+    masked: "Hello",
+    slots: [],
+    magpieBaseUrl: "http://127.0.0.1:9",
+  }, {
+    fetchImpl: async (_url, init) => {
+      seen = JSON.parse(init.body)
+      return new Response(JSON.stringify({ choices: [{ message: { content: "こんにちは" } }] }), {
+        headers: { "content-type": "application/json" },
+      })
+    },
+  })
+  assert.equal(seen.model, "community/brand-new-model")
+  assert.match(seen.messages[0].content, /日本語/)
+  assert.match(seen.messages[0].content, new RegExp(MARKER))
+  assert.equal(text, "こんにちは")
+})
+
+test("运行时代码不内置厂商模型表", () => {
+  const banned = ["deepseek/", "gpt-5", "grok/", "gemini/"]
+  for (const file of ["hooks.mjs", "translate.mjs", "match.mjs", "prompt.mjs", "config.mjs", "extract.mjs"]) {
+    const text = fs.readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8")
+    for (const word of banned) assert.equal(text.includes(word), false, `${file} 含有 ${word}`)
+  }
+})
+
+test("只要日志、文件和 webhook 时不打开网页", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "plain-zh-sink-"))
+  const hits = []
+  const webhook = http.createServer((req, res) => {
+    const chunks = []
+    req.on("data", (chunk) => chunks.push(chunk))
+    req.on("end", () => {
+      hits.push(JSON.parse(Buffer.concat(chunks).toString("utf8")))
+      res.writeHead(204)
+      res.end()
+    })
+  })
+  const translator = http.createServer((req, res) => {
+    const chunks = []
+    req.on("data", (chunk) => chunks.push(chunk))
+    req.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"))
+      assert.equal(body.model, "my-relay/whatever-2099")
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ choices: [{ message: { content: "こんにちは" } }] }))
+    })
+  })
+  await new Promise((resolve) => webhook.listen(0, "127.0.0.1", resolve))
+  await new Promise((resolve) => translator.listen(0, "127.0.0.1", resolve))
+  const panel = await startPanel({ home, port: 39991, display: ["log"] })
+  try {
+    assert.equal(panel.url, null)
+    await assert.rejects(fetch("http://127.0.0.1:39991/health", { signal: AbortSignal.timeout(400) }))
+    const job = {
+      id: "sink-1",
+      at: new Date().toISOString(),
+      agent: "codex",
+      model: "any-vendor/some-model",
+      translator: "my-relay/whatever-2099",
+      language: "日本語",
+      display: ["log", "file", "webhook"],
+      webhookUrl: `http://127.0.0.1:${webhook.address().port}/hook`,
+      original: "Hello there.",
+      masked: "Hello there.",
+      slots: [],
+      magpieBaseUrl: `http://127.0.0.1:${translator.address().port}`,
+      gatewayKey: "secret-gateway-key",
+    }
+    fs.mkdirSync(path.join(home, "inbox"), { recursive: true })
+    fs.writeFileSync(path.join(home, "inbox", "sink-1.json"), JSON.stringify(job))
+    let row
+    const start = Date.now()
+    while (Date.now() - start < 4000) {
+      try {
+        row = fs.readFileSync(path.join(home, "log.jsonl"), "utf8")
+        if (hits.length) break
+      } catch { /* 还没写 */ }
+      await new Promise((resolve) => setTimeout(resolve, 40))
+    }
+    assert.match(row, /こんにちは/)
+    assert.equal(row.includes("secret-gateway-key"), false)
+    assert.match(fs.readFileSync(path.join(home, "latest.txt"), "utf8"), /こんにちは/)
+    assert.equal(hits[0].translation, "こんにちは")
+    assert.equal(hits[0].language, "日本語")
+    assert.equal(JSON.stringify(hits[0]).includes("secret-gateway-key"), false)
+    await assert.rejects(fetch("http://127.0.0.1:39991/health", { signal: AbortSignal.timeout(400) }))
+  } finally {
+    await panel.close()
+    webhook.close()
+    translator.close()
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
