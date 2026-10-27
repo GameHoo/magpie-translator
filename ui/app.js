@@ -96,12 +96,12 @@
     "disp.title": "Display & behaviour", "disp.sub": "Where translations appear, and when to skip.", "disp.where": "Placement",
     "disp.where.sub": "On the Translations page. Never written back to the session.", "disp.badge": "Show translator badge",
     "disp.badge.sub": "Which model translated, and how long it took", "disp.collapse": "Collapse original by default",
-    "disp.collapse.sub": "Only for \u201cBelow original\u201d", "disp.skip": "Skip if already in target language",
+    "disp.collapse.sub": "Only for “Below original”", "disp.skip": "Skip if already in target language",
     "disp.skip.sub": "Detected locally; no call, no history entry", "disp.code": "Keep code and commands as is", "common.always": "Always on",
     "disp.code.sub": "Fenced blocks, inline code, paths and commands are never rewritten", "disp.timeout": "Timeout",
-    "disp.timeout.sub": "Give up and record as \u201cTimed out\u201d", "disp.hist": "Keep history", "disp.hist.sub": "Stored locally; oldest dropped first",
+    "disp.timeout.sub": "Give up and record as “Timed out”", "disp.hist": "Keep history", "disp.hist.sub": "Stored locally; oldest dropped first",
     "rules.title": "Rules", "rules.sub": "Matched top to bottom; first match wins. Drag or use arrows to reorder.",
-    "rules.fall": "Nothing is translated when no rule matches. Put \u201cAll models\u201d last as a fallback.", "rules.add": "Add rule",
+    "rules.fall": "Nothing is translated when no rule matches. Put “All models” last as a fallback.", "rules.add": "Add rule",
     "prompt.title": "Prompt", "prompt.sub": "Shared by all rules; a rule can override it under Advanced.", "prompt.reset": "Reset",
     "prompt.vars": "Insert variable", "prompt.preview": "PREVIEW", "save.discard": "Discard", "save.save": "Save",
     "hist.title": "Translations", "hist.export": "Export", "hist.settings": "Rules", "hist.search": "Search original or translation",
@@ -843,7 +843,7 @@
         const mid = Math.floor(lats.length / 2);
         med = lats.length % 2 ? lats[mid] : (lats[mid - 1] + lats[mid]) / 2;
       }
-      $("#stOk").textContent = rate == null ? (lang === "en" ? "succeeded \u2014" : "成功率 \u2014") : T("h.rate", { n: rate });
+      $("#stOk").textContent = rate == null ? (lang === "en" ? "succeeded —" : "成功率 —") : T("h.rate", { n: rate });
       $("#stLat").textContent = med == null ? T("h.latNone") : T("h.lat", { n: med.toFixed(1) });
     }
     function fillFilters() {
@@ -895,7 +895,7 @@
         }
         const prev = e.status === "ok" ? titleOf(e) : plain(e.blocks[0]?.src || "");
         html += `<button class="entry is-${esc(e.status)}" type="button" role="option" aria-selected="${e.id === state.sel}" data-id="${esc(e.id)}">
-          <div class="e-top"><span class="badge ${agentClass(e.agent)}">${esc(e.agent || "\u2014")}</span><span class="status ${esc(e.status)}">${esc(T("st." + e.status))}</span><span class="e-time">${esc(clock(e.at))}</span></div>
+          <div class="e-top"><span class="badge ${agentClass(e.agent)}">${esc(e.agent || "—")}</span><span class="status ${esc(e.status)}">${esc(T("st." + e.status))}</span><span class="e-time">${esc(clock(e.at))}</span></div>
           <div class="e-prev">${esc(prev)}</div>
           <div class="e-models"><span>${esc(bare(e.source) || e.source)}</span>${e.translator ? `${icon("arrow", "xs")}<span>${esc(bare(e.translator))}</span>` : ""}</div></button>`;
       });
@@ -927,10 +927,10 @@
       const head = titleOf(e);
       const metaBits = [
         `<span class="m">${icon("clock", "xs")}<b>${esc(clockFull(e.at))}</b></span>`,
-        `<span class="m"><span class="badge ${agentClass(e.agent)}">${esc(e.agent || "\u2014")}</span></span>`,
-        `<span class="m">${icon("globe", "xs")}<b>${esc(detectFrom(e.raw.original) ? `${detectFrom(e.raw.original)} \u2192 ${e.to}` : e.to)}</b></span>`,
+        `<span class="m"><span class="badge ${agentClass(e.agent)}">${esc(e.agent || "—")}</span></span>`,
+        `<span class="m">${icon("globe", "xs")}<b>${esc(detectFrom(e.raw.original) ? `${detectFrom(e.raw.original)} → ${e.to}` : e.to)}</b></span>`,
         `<span class="m">${icon("sparkle", "xs")}<b>${esc(e.style)}</b></span>`,
-        `<span class="m">${icon("zap", "xs")}<b>${e.status === "ok" && e.outs[e.translator] ? `${e.outs[e.translator].latency.toFixed(1)} s` : e.status === "timeout" ? `> ${(e.ms / 1000).toFixed(1)} s` : "\u2014"}</b></span>`,
+        `<span class="m">${icon("zap", "xs")}<b>${e.status === "ok" && e.outs[e.translator] ? `${e.outs[e.translator].latency.toFixed(1)} s` : e.status === "timeout" ? `> ${(e.ms / 1000).toFixed(1)} s` : "—"}</b></span>`,
       ];
       const rule = ruleLabel(e);
       if (rule) metaBits.push(`<span class="m">${lang === "en" ? "Rule" : "规则"} <b>${esc(rule)}</b></span>`);
@@ -939,7 +939,7 @@
         <div class="err-card"><div class="ico">${icon("clock", "")}</div>
           <h3>${esc(T("h.timeoutTitle"))}</h3>
           <p><span class="mono">${esc(e.translator)}</span> ${lang === "en" ? "did not answer in time. The original reply is unchanged." : "没有按时返回。原文不受影响，Agent 会话照常继续。"}</p>
-          <div><div class="err-detail">${esc(e.error || `timeout after ${(e.ms / 1000).toFixed(1)} s`)}${rule ? ` \u00b7 ${esc(rule)}` : ""}</div>
+          <div><div class="err-detail">${esc(e.error || `timeout after ${(e.ms / 1000).toFixed(1)} s`)}${rule ? ` · ${esc(rule)}` : ""}</div>
           <div class="err-actions"><button class="btn sm primary" type="button" data-act="retry">${icon("refresh")}${esc(T("h.retry"))}</button>
             <button class="btn sm" type="button" data-act="retry-with">${icon("columns")}${esc(T("h.retryWith"))}</button>
             <a class="btn sm ghost" href="settings.html#timeout">${icon("settings")}${esc(T("h.adjust"))}</a></div></div></div>`
@@ -947,7 +947,7 @@
         <div class="err-card failed"><div class="ico">${icon("alert", "")}</div>
           <h3>${esc(T("h.failTitle"))}</h3>
           <p>${lang === "en" ? "The translator returned an error. Retry, or try another model." : "翻译模型返回了错误。可以重试，或换一个模型。"}</p>
-          <div><div class="err-detail">${esc(e.error)} \u00b7 ${esc(e.translator)}</div>
+          <div><div class="err-detail">${esc(e.error)} · ${esc(e.translator)}</div>
           <div class="err-actions"><button class="btn sm primary" type="button" data-act="retry">${icon("refresh")}${esc(T("h.retry"))}</button>
             <button class="btn sm" type="button" data-act="retry-with">${icon("columns")}${esc(T("h.retryWith"))}</button></div></div></div>`
         : e.status === "skipped" ? `
@@ -1072,7 +1072,7 @@
         if (a === "copy-dst") copyText(e.outs[e.translator]?.text || "");
         if (a === "collapse") { state.collapsed = !state.collapsed; renderDetail(e); }
         if (a === "expand-orig") { state.openOriginal = true; renderDetail(e); }
-        if (a === "better") { t.style.color = "var(--accent)"; toast(`${T("h.better")} \u00b7 ${t.closest(".c-head")?.querySelector(".who")?.textContent || ""}`); }
+        if (a === "better") { t.style.color = "var(--accent)"; toast(`${T("h.better")} · ${t.closest(".c-head")?.querySelector(".who")?.textContent || ""}`); }
         if (a === "retry" || a === "retranslate") queue(e, e.translator, true);
         if (a === "compare" || a === "retry-with") {
           modelPicker(t, { current: null, allowSpecial: false, onPick: (v) => {
@@ -1138,7 +1138,7 @@
           })), null, 2));
           return;
         }
-        copyText(rows.map((e) => `## ${clockFull(e.at)} \u00b7 ${e.agent}\n\n${e.raw.original || ""}\n\n---\n\n${e.outs[e.translator]?.text || e.error || ""}`).join("\n\n"));
+        copyText(rows.map((e) => `## ${clockFull(e.at)} · ${e.agent}\n\n${e.raw.original || ""}\n\n---\n\n${e.outs[e.translator]?.text || e.error || ""}`).join("\n\n"));
       });
       popover(ev.currentTarget, el, { align: "right", width: 260 });
     });
@@ -1192,7 +1192,7 @@
     function demoRows() {
       if (demoCache) return demoCache;
       demoCache = [
-        { id: "raft", at: new Date().toISOString(), agent: "Codex", model: "openai/gpt-6-astra", translator: "traex/doubao-seed-2.1-pro", language: "简体中文", style: PRESETS[0].style, ms: 2400, status: "done", original: "Short answer: a linearizable read in Raft must observe every write that was committed before the read started.\n\nThere are two standard ways to do it:\n\n- **ReadIndex** \u2014 the leader records its current commit index.\n- **Lease read** \u2014 the leader skips the extra round trip.\n\n```go\nfunc (n *node) LinearizableRead(ctx context.Context) error {\n    return n.applyWait.Wait(ctx, idx)\n}\n```", translation: "简单说：Raft 里的线性一致读，必须能看到读请求开始之前已经提交的所有写入。\n\n常见做法有两种：\n\n- **ReadIndex**：leader 先记下当前的 commit index。\n- **Lease read（租约读）**：leader 省掉那一轮心跳。\n\n```go\nfunc (n *node) LinearizableRead(ctx context.Context) error {\n    return n.applyWait.Wait(ctx, idx)\n}\n```", comparisons: [{ id: "c1", translator: "grok/grok-4.7-build-fast", translation: "一句话：Raft 中的线性一致读要求读到读请求开始前已提交的全部写入。\n\n标准做法有两种：\n\n- **ReadIndex**：leader 记录当前提交索引。\n- **Lease read**：leader 跳过额外往返。", ms: 1100, error: "" }] },
+        { id: "raft", at: new Date().toISOString(), agent: "Codex", model: "openai/gpt-6-astra", translator: "traex/doubao-seed-2.1-pro", language: "简体中文", style: PRESETS[0].style, ms: 2400, status: "done", original: "Short answer: a linearizable read in Raft must observe every write that was committed before the read started.\n\nThere are two standard ways to do it:\n\n- **ReadIndex** — the leader records its current commit index.\n- **Lease read** — the leader skips the extra round trip.\n\n```go\nfunc (n *node) LinearizableRead(ctx context.Context) error {\n    return n.applyWait.Wait(ctx, idx)\n}\n```", translation: "简单说：Raft 里的线性一致读，必须能看到读请求开始之前已经提交的所有写入。\n\n常见做法有两种：\n\n- **ReadIndex**：leader 先记下当前的 commit index。\n- **Lease read（租约读）**：leader 省掉那一轮心跳。\n\n```go\nfunc (n *node) LinearizableRead(ctx context.Context) error {\n    return n.applyWait.Wait(ctx, idx)\n}\n```", comparisons: [{ id: "c1", translator: "grok/grok-4.7-build-fast", translation: "一句话：Raft 中的线性一致读要求读到读请求开始前已提交的全部写入。\n\n标准做法有两种：\n\n- **ReadIndex**：leader 记录当前提交索引。\n- **Lease read**：leader 跳过额外往返。", ms: 1100, error: "" }] },
         { id: "timeout", at: new Date(Date.now() - 600000).toISOString(), agent: "Pi", model: "cursor/grok-4.7", translator: "grok/grok-4.7-build-fast", language: "简体中文", style: PRESETS[0].style, ms: 30000, status: "error", error: "The operation timed out.（已重试一次）", original: "Here's the migration plan for moving the session store from Redis to Postgres:\n\n- Create the `sessions` table.\n- Dual-write for one release.", translation: "" },
         { id: "fail", at: new Date(Date.now() - 1200000).toISOString(), agent: "Claude Code", model: "anthropic/claude-sonnet-4.6", translator: "grok/grok-4.7-build-fast", language: "简体中文", style: PRESETS[0].style, ms: 800, status: "error", error: "HTTP 429", original: "Refactored the auth middleware: tokens are now verified once per request.", translation: "" },
       ];
