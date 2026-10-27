@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>旁路转述</title>
+<link rel="stylesheet" href="history.css">
+</head>
+<body>
+<main id="app">
+  <h1>旁路转述</h1>
+  <p class="note">工作模型的原文仍回到原来的会话。这里只决定用哪个模型、译成什么语言、以及哪些回复要译。</p>
+  <p id="status">正在读取设置…</p>
+  <div id="form" hidden>
+    <label class="field">目标语言
+      <select id="language"></select>
+    </label>
+    <label class="field">语气
+      <select id="stylePreset"></select>
+    </label>
+    <label class="field" id="styleCustomWrap" hidden>自定义语气
+      <textarea id="styleCustom"></textarea>
+    </label>
+    <label class="field">翻译超时
+      <select id="timeout"></select>
+    </label>
+    <label class="field">历史条数
+      <select id="historyLimit"></select>
+    </label>
+    <div class="checks">
+      <label><input id="rewrite" type="checkbox"> 原文已经是目标语言时也改写成更直白的说法</label>
+      <label><input id="localPanel" type="checkbox"> 同时打开本机 127.0.0.1 页面（默认关）</label>
+    </div>
+    <div class="field">展示
+      <div class="checks" id="display"></div>
+    </div>
+    <label class="field">提示词（空着就用默认任务句）
+      <textarea id="prompt" placeholder="Rewrite the user's text into plain, easy-to-read {language}."></textarea>
+    </label>
+    <p class="note">可用占位符 {language} {style} {model} {translator}。恢复默认会清空这格。</p>
+    <button type="button" id="resetPrompt">恢复默认提示词</button>
+    <h2>规则</h2>
+    <p class="note">从上到下，第一条命中的生效。翻译模型要选一个具体 id。来源模型可以选全部、某一家的全部，或自己写带 * 的式样。</p>
+    <div id="rules"></div>
+    <button type="button" id="addRule">添加规则</button>
+    <p><button type="button" id="save">保存</button></p>
+    <p id="saveStatus" class="note"></p>
+  </div>
+</main>
+<script src="catalog.js"></script>
+<script src="settings.js"></script>
+</body>
+</html>

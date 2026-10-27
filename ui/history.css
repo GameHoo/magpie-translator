@@ -1,0 +1,53 @@
+/* 版面是临时的。设计稿到了以后按稿换，不要在这上面打磨。 */
+:root {
+  color: var(--magpie-ink, #1c1915);
+  background: var(--magpie-bg, #f6f3ee);
+  font: 14px/1.45 ui-sans-serif, "Noto Sans CJK SC", sans-serif;
+}
+body { margin: 12px; }
+h1 { font-size: 18px; font-weight: 650; margin: 0 0 8px; }
+p { margin: 6px 0; }
+label, .field { display: block; margin: 8px 0; }
+.checks label { display: inline-flex; gap: 4px; align-items: center; margin-right: 10px; }
+select, textarea, input[type="text"], input[type="search"] {
+  width: 100%;
+  max-width: 42rem;
+  font: inherit;
+  color: inherit;
+  background: var(--magpie-card, #fff);
+  border: 1px solid var(--magpie-line, #ccc);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+textarea { min-height: 5.5rem; }
+button {
+  font: inherit;
+  margin: 0 6px 6px 0;
+  padding: 4px 10px;
+}
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.row .field { flex: 1 1 12rem; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pane {
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid var(--magpie-line, #ccc);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--magpie-card, #fff);
+}
+.pane pre {
+  margin: 8px 0;
+  padding: 8px;
+  overflow: auto;
+  background: var(--magpie-code, #efe6d6);
+}
+.meta { color: var(--magpie-muted, #666); font-size: 12px; }
+.card { border-top: 1px solid var(--magpie-line, #ccc); padding: 10px 0; }
+.err { color: var(--magpie-danger, #9c2f2f); }
+.note { color: var(--magpie-muted, #666); }
+@media (max-width: 700px) {
+  .pair { grid-template-columns: 1fr; }
+}

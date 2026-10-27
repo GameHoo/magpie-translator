@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>转述记录</title>
+<link rel="stylesheet" href="history.css">
+</head>
+<body>
+<main>
+  <h1>转述记录</h1>
+  <p class="note">左右对照原文和译文。换一个翻译模型再译一次后，结果叠在同一条下面。</p>
+  <p id="status">正在读取记录…</p>
+  <div id="tools" hidden>
+    <div class="row">
+      <label class="field">搜索
+        <input id="q" type="search">
+      </label>
+      <label class="field">Agent
+        <select id="agent"><option value="">全部</option></select>
+      </label>
+      <label class="field">来源模型
+        <select id="model"><option value="">全部</option></select>
+      </label>
+      <label class="field">翻译模型
+        <select id="translator"><option value="">全部</option></select>
+      </label>
+    </div>
+    <p><button type="button" id="exportBtn">导出当前筛选</button></p>
+    <textarea id="export" hidden></textarea>
+  </div>
+  <div id="list"></div>
+</main>
+<script src="catalog.js"></script>
+<script src="history.js"></script>
+</body>
+</html>
