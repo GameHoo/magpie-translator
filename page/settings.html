@@ -12,7 +12,7 @@
   <header class="card plugin-hero">
     <img class="logo" src="icon.svg" width="44" height="44" alt="">
     <div style="flex:1;min-width:0">
-      <h1>magpie-translator <span class="ver" id="ver">v0.1.0</span></h1>
+      <h1>magpie-translator <span class="ver" id="ver">v0.2.0</span></h1>
       <p data-i18n="hero.desc">Agent 工作时，由另一个模型把它的最终回复改写成你的语言。译文单独显示，不会写回会话；代码与命令保持原样。</p>
     </div>
     <div class="hero-stat"><span class="live-dot" id="liveDot"></span><span id="heroStatus">运行中 · 今日已翻译 0 条</span></div>
@@ -71,7 +71,7 @@
         <label class="switch"><input type="checkbox" checked disabled><span class="track"></span></label>
       </div>
       <div class="row" id="timeoutRow">
-        <div class="label"><b data-i18n="disp.timeout">超时</b><small data-i18n="disp.timeout.sub">超过后放弃本次翻译，记录为「超时」</small></div>
+        <div class="label"><b data-i18n="disp.timeout">超时</b><small data-i18n="disp.timeout.sub">超过后放弃本次翻译，记录为「超时」。magpie 最多等 gatewayTimeoutMs（10 秒）</small></div>
         <div>
           <div class="slider"><input type="range" id="timeout" min="0" max="5" step="1" value="5" data-dirty><span class="val" id="timeoutVal">120 s</span></div>
           <div class="ticks"><span>10</span><span>20</span><span>30</span><span>60</span><span>90</span><span>120</span></div>
@@ -132,8 +132,6 @@
 </main>
 <div class="toast" id="toast"><svg class="i sm"><use href="#i-check"/></svg><span></span></div>
 <script src="_magpie/bridge.js"></script>
-<script src="catalog.js"></script>
-<script src="feed.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

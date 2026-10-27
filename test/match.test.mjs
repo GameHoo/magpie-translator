@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import test from "node:test"
+import { test } from "bun:test"
 import { matchRule } from "../src/match.mjs"
 
 test("按 agent 和模型命中第一条规则", () => {

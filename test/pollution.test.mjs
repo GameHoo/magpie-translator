@@ -3,11 +3,11 @@ import fs from "node:fs"
 import http from "node:http"
 import os from "node:os"
 import path from "node:path"
-import test from "node:test"
+import { test } from "bun:test"
 import { MARKER } from "../src/constants.mjs"
 import { extractUserText } from "../src/extract.mjs"
+import { readHistory } from "../src/history.mjs"
 import { onResponse } from "../src/hooks.mjs"
-import { startPanel } from "../src/panel.mjs"
 import { chatNextRequest, claudeNextRequest, codexNextRequest, geminiNextRequest } from "../src/replay.mjs"
 import { assembleAnthropic, assembleChat, assembleResponses, encodeSSE } from "../src/sse.mjs"
 
@@ -112,7 +112,7 @@ function anthropicSse(text, { tool = false } = {}) {
 test("下一轮发给原模型的请求不含译文", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-proof-"))
   process.env.MAGPIE_TRANSLATOR_HOME = home
-  process.env.MAGPIE_TRANSLATOR_NO_SPAWN = "1"
+  process.env.XDG_CONFIG_HOME = home
   const translator = await listen((_req, res, body) => {
     const json = JSON.parse(body)
     assert.equal(json.messages[0].content.includes(MARKER), true)
@@ -126,12 +126,11 @@ test("下一轮发给原模型的请求不含译文", async () => {
     res.writeHead(200, { "content-type": "application/json" })
     res.end("{}")
   })
-  const panel = await startPanel({ home, port: 0 })
   const options = {
+    models: [],
     magpieBaseUrl: translator.url,
     gatewayKey: "secret-gateway-key",
-    panelPort: panel.port,
-    display: ["panel", "log"],
+    display: ["log"],
     rules: [
       { agent: "codex", model: "gpt-5.4", translator: "mock/translator-zh" },
       { agent: "claude", model: "claude-*", translator: "mock/translator-zh" },
@@ -139,20 +138,15 @@ test("下一轮发给原模型的请求不含译文", async () => {
   }
   let doneCount = 0
 
-  async function waitTranslation() {
-    const start = Date.now()
-    while (Date.now() - start < 6000) {
-      const body = await (await fetch(`${panel.url}/api/items`)).json()
-      const done = body.items.filter((item) => item.status === "done")
-      const failed = body.items.find((item) => item.status === "error")
-      if (failed) throw new Error(failed.error)
-      if (done.length > doneCount) {
-        doneCount = done.length
-        return done[0]
-      }
-      await new Promise((resolve) => setTimeout(resolve, 30))
+  function waitTranslation() {
+    const done = readHistory().filter((item) => item.status === "done")
+    const failed = readHistory().find((item) => item.status === "error")
+    if (failed) throw new Error(failed.error)
+    if (done.length > doneCount) {
+      doneCount = done.length
+      return done[0]
     }
-    throw new Error("转述没有出现在旁路面板")
+    throw new Error("转述没有写进历史")
   }
 
   async function sendToWorkModel(request, pathName) {
@@ -204,7 +198,7 @@ test("下一轮发给原模型的请求不含译文", async () => {
       request: { model: "gpt-5.4", stream: true }, state: {},
     })
     assert.deepEqual(responsesReply, responses.hookReply)
-    const responsesItem = await waitTranslation()
+    const responsesItem = waitTranslation()
     const responsesWire = await sendToWorkModel(codexNextRequest({
       model: "gpt-5.4",
       items: responses.items,
@@ -219,7 +213,7 @@ test("下一轮发给原模型的请求不含译文", async () => {
       success: true, options, agent: "claude", protocol: "anthropic", model: "claude-opus-4-7",
       request: { model: "claude-opus-4-7", stream: true }, state: {},
     })
-    const claudeItem = await waitTranslation()
+    const claudeItem = waitTranslation()
     const claudeWire = await sendToWorkModel(claudeNextRequest({
       model: "claude-opus-4-7",
       content: claude.content,
@@ -234,7 +228,7 @@ test("下一轮发给原模型的请求不含译文", async () => {
       success: true, options, agent: "codex", protocol: "chat", model: "gpt-5.4",
       request: { model: "gpt-5.4", stream: true }, state: {},
     })
-    const chatItem = await waitTranslation()
+    const chatItem = waitTranslation()
     const chatWire = await sendToWorkModel(chatNextRequest({
       model: "gpt-5.4",
       message: chat.message,
@@ -249,7 +243,7 @@ test("下一轮发给原模型的请求不含译文", async () => {
       success: true, options, agent: "codex", protocol: "gemini", model: "gpt-5.4",
       request: { model: "gpt-5.4" }, state: {},
     })
-    const geminiItem = await waitTranslation()
+    const geminiItem = waitTranslation()
     const geminiWire = await sendToWorkModel(geminiNextRequest({
       model: "gpt-5.4",
       parts: geminiReply.candidates[0].content.parts,
@@ -258,15 +252,13 @@ test("下一轮发给原模型的请求不含译文", async () => {
     assertClean(geminiWire, geminiItem)
 
     const callsBefore = translator.bodies.length
-    const itemsBefore = (await (await fetch(`${panel.url}/api/items`)).json()).items.length
+    const itemsBefore = readHistory().length
     const toolSse = assembleResponses(responsesSse("I'll check the mtime.", { tool: true }))
     await onResponse(toolSse.hookReply, {
       success: true, options, agent: "codex", protocol: "responses", model: "gpt-5.4",
       request: { model: "gpt-5.4" }, state: {},
     })
-    await new Promise((resolve) => setTimeout(resolve, 350))
-    const after = await (await fetch(`${panel.url}/api/items`)).json()
-    assert.equal(after.items.length, itemsBefore)
+    assert.equal(readHistory().length, itemsBefore)
     assert.equal(translator.bodies.length, callsBefore)
     const toolText = gathered(await sendToWorkModel(codexNextRequest({
       model: "gpt-5.4",
@@ -277,7 +269,6 @@ test("下一轮发给原模型的请求不含译文", async () => {
     assert.equal(toolText.includes(CMD), true)
     assert.equal(toolText.includes("I'll check the mtime."), true)
   } finally {
-    await panel.close()
     await translator.close()
     await recorder.close()
     fs.rmSync(home, { recursive: true, force: true })

@@ -6,7 +6,7 @@ import { DEFAULT_DISPLAY, DEFAULT_LANGUAGE, parseDisplay, parseFlag, parseHistor
 
 export const MAX_NOTE = 4000
 export const MAX_RULES = 40
-export const EDITABLE = ["language", "prompt", "style", "display", "webhookUrl", "rules", "translateTimeoutMs", "rewriteSameLanguage", "localPanel", "historyLimit"]
+export const EDITABLE = ["language", "prompt", "style", "display", "webhookUrl", "rules", "translateTimeoutMs", "rewriteSameLanguage", "historyLimit"]
 const RULE_FIELDS = new Set(["agent", "model", "translator", "language", "prompt", "style", "display", "webhookUrl"])
 const SKIP_KEYS = new Set(["__proto__", "constructor", "prototype"])
 
@@ -149,7 +149,7 @@ function cleanDisplay(value, label) {
   for (const item of source) {
     const name = String(item || "").trim().toLowerCase()
     if (!name) continue
-    if (!["panel", "log", "file", "stdout", "notify", "webhook"].includes(name)) {
+    if (!["log", "file", "stdout", "notify", "webhook"].includes(name)) {
       return { error: `${label}不认识 ${name}` }
     }
     if (!out.includes(name)) out.push(name)
@@ -221,9 +221,6 @@ export function normalizeSettings(input, previous = {}) {
   const rewrite = input.rewriteSameLanguage == null
     ? parseFlag(prior.rewriteSameLanguage, false)
     : parseFlag(input.rewriteSameLanguage, false)
-  const localPanel = input.localPanel == null
-    ? parseFlag(prior.localPanel, false)
-    : parseFlag(input.localPanel, false)
   if (!Array.isArray(input.rules)) return { error: "rules 必须是数组" }
   if (input.rules.length > MAX_RULES) return { error: `规则最多 ${MAX_RULES} 条` }
   const rules = []
@@ -242,8 +239,9 @@ export function normalizeSettings(input, previous = {}) {
   options.rules = rules
   options.translateTimeoutMs = timeout
   options.rewriteSameLanguage = rewrite
-  options.localPanel = localPanel
   options.historyLimit = historyLimit
+  delete options.localPanel
+  delete options.panelPort
   delete options._compare
   return { options }
 }
@@ -261,7 +259,6 @@ export function viewOptions(options = {}) {
     rules: rules.filter((rule) => rule && typeof rule === "object").map(viewRule),
     translateTimeoutMs: parseTimeout(source.translateTimeoutMs),
     rewriteSameLanguage: parseFlag(source.rewriteSameLanguage, false),
-    localPanel: parseFlag(source.localPanel, false),
     historyLimit: parseHistoryLimit(source.historyLimit),
     preserved,
   }
@@ -342,7 +339,6 @@ function emptyView() {
     rules: [],
     translateTimeoutMs: parseTimeout(undefined),
     rewriteSameLanguage: false,
-    localPanel: false,
     historyLimit: parseHistoryLimit(undefined),
     preserved: [],
   }
@@ -374,6 +370,35 @@ export function saveSettings(input, env = process.env, locate = {}) {
   }
   const view = viewOptions(normalized.options)
   return { spec: entry.spec, file, changed, options: view, preserved: view.preserved }
+}
+
+// 把页面能读的 feed / models 写进 plugins.json 里这一条的 options。
+// 这是 magpie 允许页面读到的插件自己的存储（magpie.options）。
+// 内容没变就不写：写入会让宿主在下一次请求时重启。
+export function publishRuntime(env = process.env, { feed, models, clearJob = false } = {}) {
+  let loaded
+  try { loaded = readPluginList(env) } catch { return false }
+  if (loaded.missing) return false
+  const entry = findPlugin(loaded.list, env, {})
+  if (!entry) return false
+  const options = entry.options && typeof entry.options === "object" && !Array.isArray(entry.options) ? { ...entry.options } : {}
+  let changed = false
+  if (feed && JSON.stringify(options.feed ?? null) !== JSON.stringify(feed)) {
+    options.feed = feed
+    changed = true
+  }
+  if (Array.isArray(models) && JSON.stringify(options.models ?? null) !== JSON.stringify(models)) {
+    options.models = models
+    changed = true
+  }
+  if (clearJob && options._compare) {
+    delete options._compare
+    changed = true
+  }
+  if (!changed) return false
+  entry.options = options
+  writeList(loaded.file, loaded.list)
+  return true
 }
 
 export const DEFAULTS = { language: DEFAULT_LANGUAGE, display: [...DEFAULT_DISPLAY] }

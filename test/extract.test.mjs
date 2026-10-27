@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import test from "node:test"
+import { test } from "bun:test"
 import { extractUserText } from "../src/extract.mjs"
 import { maskCode, restore } from "../src/mask.mjs"
 

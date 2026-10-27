@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import test from "node:test"
+import { test } from "bun:test"
 import { translateJob } from "../src/translate.mjs"
 
 test("超时重试一次，400 不重试", async () => {

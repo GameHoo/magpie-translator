@@ -2,15 +2,13 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import test from "node:test"
+import { test } from "bun:test"
 import { parseHistoryLimit } from "../src/config.mjs"
-import { addComparison, publicEntry, recordTranslation, replaceTranslation, restoreFeed } from "../src/history.mjs"
-import { startPanel } from "../src/panel.mjs"
+import { addComparison, publicEntry, publicFeed, recordTranslation, replaceTranslation, restoreFeed } from "../src/history.mjs"
 
-test("历史有上限，公开脚本不含密钥，并且把 < 转义", () => {
+test("历史有上限，公开 feed 不含密钥", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-hist-"))
-  const ui = fs.mkdtempSync(path.join(os.tmpdir(), "translator-ui-"))
-  const env = { ...process.env, MAGPIE_TRANSLATOR_HOME: home, MAGPIE_TRANSLATOR_UI: ui }
+  const env = { ...process.env, MAGPIE_TRANSLATOR_HOME: home }
   recordTranslation({ id: "drop", original: "gone", translation: "没" }, env, 20)
   recordTranslation({
     id: "kept",
@@ -33,19 +31,16 @@ test("历史有上限，公开脚本不含密钥，并且把 < 转义", () => {
   const kept = rows.find((row) => row.id === "kept")
   assert.equal(kept.masked, "masked-one")
   assert.equal(publicEntry(kept).masked, undefined)
-  const feed = fs.readFileSync(path.join(ui, "feed.js"), "utf8")
-  assert.match(feed, /MAGPIE_TRANSLATOR_FEED/)
-  assert.match(feed, /\\u003cscript/)
-  assert.equal(feed.includes("<script>"), false)
+  const feed = JSON.stringify(publicFeed(rows))
   assert.equal(feed.includes("secret-gateway-key"), false)
   assert.equal(feed.includes("masked-one"), false)
   assert.equal(feed.includes("secret prompt"), false)
   assert.equal(feed.includes("127.0.0.1:9"), false)
+  assert.match(feed, /<script>/)
   addComparison("new", { id: "cmp", translator: "other/model", translation: "另译", ms: 12 }, env)
-  const again = fs.readFileSync(path.join(ui, "feed.js"), "utf8")
+  const again = JSON.stringify(publicFeed(JSON.parse(fs.readFileSync(path.join(home, "history.json"), "utf8"))))
   assert.match(again, /other\/model/)
   fs.rmSync(home, { recursive: true, force: true })
-  fs.rmSync(ui, { recursive: true, force: true })
 })
 
 test("不保存会清空历史，5000 条是上限", () => {
@@ -66,8 +61,7 @@ test("不保存会清空历史，5000 条是上限", () => {
 
 test("log.jsonl 里更早的行会补进 feed，已有历史不重复", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-backfill-"))
-  const ui = fs.mkdtempSync(path.join(os.tmpdir(), "translator-backfill-ui-"))
-  const env = { ...process.env, MAGPIE_TRANSLATOR_HOME: home, MAGPIE_TRANSLATOR_UI: ui }
+  const env = { ...process.env, MAGPIE_TRANSLATOR_HOME: home }
   const lines = []
   for (let i = 0; i < 21; i += 1) {
     lines.push(JSON.stringify({
@@ -101,7 +95,7 @@ test("log.jsonl 里更早的行会补进 feed，已有历史不重复", () => {
   const failed = rows.find((row) => row.original === "original 3")
   assert.equal(failed.status, "error")
   assert.equal(failed.error, "upstream down")
-  const feed = fs.readFileSync(path.join(ui, "feed.js"), "utf8")
+  const feed = JSON.stringify(publicFeed(rows))
   assert.match(feed, /译文 20/)
   assert.equal(feed.includes("secret prompt"), false)
   assert.equal(feed.includes("original 0"), false)
@@ -109,7 +103,6 @@ test("log.jsonl 里更早的行会补进 feed，已有历史不重复", () => {
   assert.equal(again.length, 20)
   assert.equal(again.filter((row) => row.original === "original 5").length, 1)
   fs.rmSync(home, { recursive: true, force: true })
-  fs.rmSync(ui, { recursive: true, force: true })
 })
 
 test("不保存时不从日志把历史补回来", () => {
@@ -120,16 +113,4 @@ test("不保存时不从日志把历史补回来", () => {
   assert.deepEqual(rows, [])
   assert.equal(fs.existsSync(path.join(home, "history.json")), false)
   fs.rmSync(home, { recursive: true, force: true })
-})
-
-test("显式只要日志时，localPanel 仍打开本机页", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-local-"))
-  const panel = await startPanel({ home, port: 0, display: ["log"], localPanel: true })
-  try {
-    assert.equal(panel.host, "127.0.0.1")
-    assert.match(panel.url, /^http:\/\/127\.0\.0\.1:/)
-  } finally {
-    await panel.close()
-    fs.rmSync(home, { recursive: true, force: true })
-  }
 })

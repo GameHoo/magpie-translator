@@ -3,11 +3,10 @@ import fs from "node:fs"
 import http from "node:http"
 import os from "node:os"
 import path from "node:path"
-import test from "node:test"
+import { test } from "bun:test"
 import { parseDisplay, presentation } from "../src/config.mjs"
 import { MARKER } from "../src/constants.mjs"
 import { onResponse } from "../src/hooks.mjs"
-import { startPanel } from "../src/panel.mjs"
 import { defaultTask, systemPrompt } from "../src/prompt.mjs"
 import { translateJob } from "../src/translate.mjs"
 
@@ -70,37 +69,43 @@ test("展示出口认别名，不认识的名字退回默认", () => {
 test("规则上的语言、提示词、展示和翻译模型盖过全局", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-cfg-"))
   process.env.MAGPIE_TRANSLATOR_HOME = home
-  process.env.MAGPIE_TRANSLATOR_NO_SPAWN = "1"
+  process.env.XDG_CONFIG_HOME = home
   const reply = { choices: [{ message: { role: "assistant", content: "Hello from any model." }, finish_reason: "stop" }] }
+  const options = {
+    models: [],
+    language: "简体中文",
+    prompt: "全局提示",
+    display: ["log"],
+    webhookUrl: "http://127.0.0.1/global",
+    rules: [{
+      translator: "plugin-grok/grok-4",
+      language: "English",
+      prompt: "rule prompt",
+      style: "short",
+      display: ["file"],
+      webhookUrl: "http://127.0.0.1:9/hook",
+    }],
+  }
   await onResponse(reply, {
     success: true,
     protocol: "chat",
     model: "any-vendor/some-model",
     request: { model: "any-vendor/some-model" },
     state: {},
-    options: {
-      language: "简体中文",
-      prompt: "全局提示",
-      display: ["log"],
-      webhookUrl: "http://127.0.0.1/global",
-      rules: [{
-        translator: "plugin-grok/grok-4",
-        language: "English",
-        prompt: "rule prompt",
-        style: "short",
-        display: ["file", "webhook"],
-        webhookUrl: "http://127.0.0.1:9/hook",
-      }],
-    },
+    options,
+    fetch: async () => new Response(JSON.stringify({ choices: [{ message: { content: "Hello." } }] }), {
+      headers: { "content-type": "application/json" },
+    }),
   })
-  const [job] = fs.readdirSync(path.join(home, "inbox")).map((name) => JSON.parse(fs.readFileSync(path.join(home, "inbox", name), "utf8")))
+  const [job] = JSON.parse(fs.readFileSync(path.join(home, "history.json"), "utf8"))
   assert.equal(job.model, "any-vendor/some-model")
   assert.equal(job.translator, "plugin-grok/grok-4")
   assert.equal(job.language, "English")
   assert.equal(job.prompt, "rule prompt")
   assert.equal(job.style, "short")
-  assert.deepEqual(job.display, ["file", "webhook"])
-  assert.equal(job.webhookUrl, "http://127.0.0.1:9/hook")
+  const view = presentation(options, options.rules[0])
+  assert.deepEqual(view.display, ["file"])
+  assert.equal(view.webhookUrl, "http://127.0.0.1:9/hook")
   assert.equal(presentation({}, {}).language, "简体中文")
   fs.rmSync(home, { recursive: true, force: true })
 })
@@ -136,8 +141,10 @@ test("运行时代码不内置厂商模型表", () => {
   }
 })
 
-test("只要日志、文件和 webhook 时不打开网页", async () => {
+test("日志、文件和 webhook 在 hook 里写完，不另开本机服务", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-sink-"))
+  process.env.MAGPIE_TRANSLATOR_HOME = home
+  process.env.XDG_CONFIG_HOME = home
   const hits = []
   const webhook = http.createServer((req, res) => {
     const chunks = []
@@ -160,36 +167,27 @@ test("只要日志、文件和 webhook 时不打开网页", async () => {
   })
   await new Promise((resolve) => webhook.listen(0, "127.0.0.1", resolve))
   await new Promise((resolve) => translator.listen(0, "127.0.0.1", resolve))
-  const panel = await startPanel({ home, port: 39991, display: ["log"] })
   try {
-    assert.equal(panel.url, null)
     await assert.rejects(fetch("http://127.0.0.1:39991/health", { signal: AbortSignal.timeout(400) }))
-    const job = {
-      id: "sink-1",
-      at: new Date().toISOString(),
+    await onResponse({
+      choices: [{ message: { role: "assistant", content: "Hello there." }, finish_reason: "stop" }],
+    }, {
+      success: true,
+      protocol: "chat",
       agent: "codex",
       model: "any-vendor/some-model",
-      translator: "my-relay/whatever-2099",
-      language: "日本語",
-      display: ["log", "file", "webhook"],
-      webhookUrl: `http://127.0.0.1:${webhook.address().port}/hook`,
-      original: "Hello there.",
-      masked: "Hello there.",
-      slots: [],
-      magpieBaseUrl: `http://127.0.0.1:${translator.address().port}`,
-      gatewayKey: "secret-gateway-key",
-    }
-    fs.mkdirSync(path.join(home, "inbox"), { recursive: true })
-    fs.writeFileSync(path.join(home, "inbox", "sink-1.json"), JSON.stringify(job))
-    let row
-    const start = Date.now()
-    while (Date.now() - start < 4000) {
-      try {
-        row = fs.readFileSync(path.join(home, "log.jsonl"), "utf8")
-        if (hits.length) break
-      } catch { /* 还没写 */ }
-      await new Promise((resolve) => setTimeout(resolve, 40))
-    }
+      request: { model: "any-vendor/some-model", messages: [{ role: "user", content: "hi" }] },
+      state: {},
+      options: {
+        models: [],
+        magpieBaseUrl: `http://127.0.0.1:${translator.address().port}`,
+        gatewayKey: "secret-gateway-key",
+        display: ["log", "file", "webhook"],
+        webhookUrl: `http://127.0.0.1:${webhook.address().port}/hook`,
+        rules: [{ translator: "my-relay/whatever-2099", language: "日本語" }],
+      },
+    })
+    const row = fs.readFileSync(path.join(home, "log.jsonl"), "utf8")
     assert.match(row, /こんにちは/)
     assert.equal(row.includes("secret-gateway-key"), false)
     assert.match(fs.readFileSync(path.join(home, "latest.txt"), "utf8"), /こんにちは/)
@@ -198,7 +196,6 @@ test("只要日志、文件和 webhook 时不打开网页", async () => {
     assert.equal(JSON.stringify(hits[0]).includes("secret-gateway-key"), false)
     await assert.rejects(fetch("http://127.0.0.1:39991/health", { signal: AbortSignal.timeout(400) }))
   } finally {
-    await panel.close()
     webhook.close()
     translator.close()
     fs.rmSync(home, { recursive: true, force: true })

@@ -4,22 +4,24 @@ import { restore } from "./mask.mjs"
 import { systemPrompt } from "./prompt.mjs"
 
 export async function translateJob(job, opts = {}) {
-  const timeoutMs = parseTimeout(job.translateTimeoutMs ?? job.timeoutMs)
+  const asked = parseTimeout(job.translateTimeoutMs ?? job.timeoutMs)
+  const timeoutMs = Math.min(asked, Number(opts.maxMs) > 0 ? Number(opts.maxMs) : asked)
   try {
     return await translateOnce(job, opts, timeoutMs)
   } catch (err) {
-    if (!retriable(err)) throw err
+    if (opts.signal?.aborted || !retriable(err)) throw err
     try {
       return await translateOnce(job, opts, timeoutMs)
     } catch (again) {
       const error = new Error(`${again?.message || again}（已重试一次）`)
       error.cause = again
+      error.status = again?.status
       throw error
     }
   }
 }
 
-async function translateOnce(job, { fetchImpl = globalThis.fetch, onDelta } = {}, timeoutMs) {
+async function translateOnce(job, { fetchImpl = globalThis.fetch, onDelta, signal } = {}, timeoutMs) {
   const base = String(job.magpieBaseUrl || DEFAULT_MAGPIE_BASE).replace(/\/$/, "")
   const res = await fetchImpl(`${base}/v1/chat/completions`, {
     method: "POST",
@@ -36,7 +38,7 @@ async function translateOnce(job, { fetchImpl = globalThis.fetch, onDelta } = {}
         { role: "user", content: job.masked },
       ],
     }),
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => "")

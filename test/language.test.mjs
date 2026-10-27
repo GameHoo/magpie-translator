@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import test from "node:test"
+import { test } from "bun:test"
 import { sameLanguage } from "../src/language.mjs"
 
 test("简体中文和英文能认出来，认不出的语言不跳过", () => {

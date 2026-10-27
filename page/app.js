@@ -58,7 +58,7 @@
       "h.pickSub": "左侧选一条，原文和译文会并排显示。", "h.none": "还没有翻译记录", "h.noneSub": "命中规则的最终回复会出现在这里。",
       "h.today": "今天", "h.yesterday": "昨天", "toast.copied": "已复制到剪贴板", "h.noOut": "没有译文", "h.retry": "重试",
       "h.retryWith": "换个模型重试…", "h.adjust": "调整超时", "h.better": "这个更好", "h.collapse": "收起列表",
-      "h.alignNote": "按段落对齐 · 同步滚动", "h.queued": "已提交，钩子重载后开始", "h.retried": "已提交重新翻译",
+      "h.alignNote": "按段落对齐 · 同步滚动", "h.queued": "已提交，下一次回复时开始", "h.retried": "已提交重新翻译，下一次回复时开始",
       "h.noMagpie": "这一页要在 magpie 里打开，才能交给翻译模型", "h.rate": "成功率 {n}%", "h.lat": "中位延迟 {n} s", "h.latNone": "中位延迟 —",
       "h.count": "共 {n} 条", "h.countF": "{n} / {all} 条", "h.timeoutTitle": "翻译超时", "h.failTitle": "翻译失败",
       "h.skipTitle": "已跳过", "h.expand": "展开原文", "st.ok": "成功", "st.failed": "失败", "st.timeout": "超时", "st.skipped": "已跳过",
@@ -82,7 +82,7 @@
       "h.pickSub": "Original and translation show side by side.", "h.none": "No translations yet", "h.noneSub": "Final replies that match a rule show up here.",
       "h.today": "Today", "h.yesterday": "Yesterday", "toast.copied": "Copied", "h.noOut": "No translation", "h.retry": "Retry",
       "h.retryWith": "Retry with…", "h.adjust": "Adjust timeout", "h.better": "Better", "h.collapse": "Hide list",
-      "h.alignNote": "Paragraph-aligned · synced scroll", "h.queued": "Queued. It starts after the hook reloads", "h.retried": "Retranslate queued",
+      "h.alignNote": "Paragraph-aligned · synced scroll", "h.queued": "Queued. It runs on the next reply", "h.retried": "Retranslate queued for the next reply",
       "h.noMagpie": "Open this page inside magpie to send it to a model", "h.rate": "{n}% succeeded", "h.lat": "median {n} s", "h.latNone": "median —",
       "h.count": "{n} total", "h.countF": "{n} / {all}", "h.timeoutTitle": "Timed out", "h.failTitle": "Translation failed",
       "h.skipTitle": "Skipped", "h.expand": "Show original", "st.ok": "OK", "st.failed": "Failed", "st.timeout": "Timed out", "st.skipped": "Skipped",
@@ -99,7 +99,7 @@
     "disp.collapse.sub": "Only for “Below original”", "disp.skip": "Skip if already in target language",
     "disp.skip.sub": "Detected locally; no call, no history entry", "disp.code": "Keep code and commands as is", "common.always": "Always on",
     "disp.code.sub": "Fenced blocks, inline code, paths and commands are never rewritten", "disp.timeout": "Timeout",
-    "disp.timeout.sub": "Give up and record as “Timed out”", "disp.hist": "Keep history", "disp.hist.sub": "Stored locally; oldest dropped first",
+    "disp.timeout.sub": "Give up and record as “Timed out”. Magpie stops the hook at gatewayTimeoutMs (10s at most)", "disp.hist": "Keep history", "disp.hist.sub": "Stored locally; oldest dropped first",
     "rules.title": "Rules", "rules.sub": "Matched top to bottom; first match wins. Drag or use arrows to reorder.",
     "rules.fall": "Nothing is translated when no rule matches. Put “All models” last as a fallback.", "rules.add": "Add rule",
     "prompt.title": "Prompt", "prompt.sub": "Shared by all rules; a rule can override it under Advanced.", "prompt.reset": "Reset",
@@ -190,17 +190,13 @@
     return setChain;
   }
 
-  function loadScript(name) {
-    return new Promise((resolve) => {
-      const old = document.querySelector(`script[data-dyn="${name}"]`);
-      if (old) old.remove();
-      const el = document.createElement("script");
-      el.src = `${name}?t=${Date.now()}`;
-      el.dataset.dyn = name;
-      el.onload = () => resolve(true);
-      el.onerror = () => resolve(false);
-      document.body.appendChild(el);
-    });
+  let cachedOptions = {};
+  async function readOptions() {
+    if (!window.magpie?.options?.get) return cachedOptions;
+    try {
+      cachedOptions = await window.magpie.options.get() || {};
+    } catch { /* keep the last copy */ }
+    return cachedOptions;
   }
 
   const LANGS = ["简体中文", "繁體中文", "English", "日本語", "한국어", "Español", "Français", "Deutsch", "Português", "Русский"];
@@ -246,10 +242,13 @@
       models: buckets.get(key) || [],
     }));
   }
-  async function loadCatalog() {
-    await loadScript("catalog.js");
-    const cat = globalThis.MAGPIE_TRANSLATOR_CATALOG;
-    const ids = Array.isArray(cat?.models) ? cat.models.slice() : [];
+  async function loadCatalog(opts) {
+    const ids = Array.isArray(opts?.models) ? opts.models.slice() : [];
+    for (const row of Array.isArray(opts?.feed?.entries) ? opts.feed.entries : []) {
+      if (row?.model) ids.push(String(row.model));
+      if (row?.translator) ids.push(String(row.translator));
+      for (const cmp of row?.comparisons || []) if (cmp?.translator) ids.push(String(cmp.translator));
+    }
     if (window.magpie?.read) {
       try {
         const listed = await window.magpie.read("providers:list");
@@ -517,8 +516,7 @@
       tr.style.setProperty("--pct", (tr.value / 5) * 100 + "%");
     }
     function todayCount() {
-      const feed = globalThis.MAGPIE_TRANSLATOR_FEED;
-      const entries = Array.isArray(feed?.entries) ? feed.entries : [];
+      const entries = Array.isArray(cachedOptions?.feed?.entries) ? cachedOptions.feed.entries : [];
       return entries.filter((e) => dayKey(e.at) === "today" && kindOf(e) === "ok").length;
     }
     function paintHero() {
@@ -655,6 +653,8 @@
       const next = { ...(base || {}) };
       Object.assign(next, body);
       delete next._compare;
+      delete next.localPanel;
+      delete next.panelPort;
       saveBtn.disabled = true;
       const result = await setOptions(next);
       if (result === true) {
@@ -750,18 +750,15 @@
     rerender = () => { applyStatic(); renderRules(); updatePreview(); paintHero(); setDirty(); };
     applyStatic(); syncTO();
     (async () => {
-      await loadCatalog();
-      let opts = {};
-      if (window.magpie?.options?.get) {
-        try { opts = await window.magpie.options.get() || {}; } catch { opts = {}; }
-      }
+      const opts = await readOptions();
+      await loadCatalog(opts);
       for (const rule of opts.rules || []) ensureModel(rule?.translator);
       hydrate(opts);
       if (location.hash === "#timeout") $("#timeoutRow").scrollIntoView({ block: "center" });
       if (params.get("picker")) setTimeout(() => { const b = $('[data-pick="dst"]'); if (b) { b.scrollIntoView({ block: "center" }); b.click(); } }, 50);
       if (params.get("empty")) { rules = []; renderRules(); cleanSnap = snapshot(); setDirty(); }
     })();
-    setInterval(async () => { await loadScript("feed.js"); paintHero(); }, 10000);
+    setInterval(async () => { await readOptions(); paintHero(); }, 10000);
   }
 
   if (document.body.dataset.page === "history") {
@@ -798,7 +795,7 @@
       return {
         id: raw.id, at: raw.at, agent: raw.agent || "", source: raw.model || "", translator: raw.translator || "",
         status, to: raw.language || "", style: styleLabel(raw.style), ms: Number(raw.ms) || 0,
-        error: raw.error || "", blocks, outs, truncated: !!raw.truncated, raw,
+        error: raw.error || "", blocks, outs, truncated: !!raw.truncated || !!raw.viewClipped, raw,
       };
     }
     function ruleLabel(e) {
@@ -1155,26 +1152,20 @@
       }
     }
     async function refresh() {
-      await loadScript("feed.js");
-      const feed = globalThis.MAGPIE_TRANSLATOR_FEED;
-      const rows = Array.isArray(feed?.entries) ? feed.entries : [];
+      const opts = await readOptions();
+      const rows = Array.isArray(opts?.feed?.entries) ? opts.feed.entries.slice() : [];
       if (params.get("demo") === "1" && !rows.length) rows.push(...demoRows());
       const key = JSON.stringify(rows);
       if (key === refresh.last) { noteWait(); return; }
       refresh.last = key;
       entries = rows.map(viewOf);
       for (const e of entries) { ensureModel(e.source); ensureModel(e.translator); }
-      if (window.magpie?.options?.get) {
-        try {
-          const opts = await window.magpie.options.get();
-          prefs = {
-            placement: opts?.placement || "beside",
-            showTranslatorBadge: opts?.showTranslatorBadge !== false,
-            collapseOriginal: opts?.collapseOriginal === true,
-            rules: Array.isArray(opts?.rules) ? opts.rules : [],
-          };
-        } catch { /* 继续用上次的偏好 */ }
-      }
+      prefs = {
+        placement: opts?.placement || "beside",
+        showTranslatorBadge: opts?.showTranslatorBadge !== false,
+        collapseOriginal: opts?.collapseOriginal === true,
+        rules: Array.isArray(opts?.rules) ? opts.rules : [],
+      };
       noteWait();
       fillFilters();
       renderList();
@@ -1182,8 +1173,8 @@
     rerender = () => { applyStatic(); fillFilters(); renderList(); };
     applyStatic();
     (async () => {
-      await loadCatalog();
       await refresh();
+      await loadCatalog(cachedOptions);
     })();
     setInterval(refresh, 4000);
     addEventListener("resize", () => renderDetail(entries.find((x) => x.id === state.sel) || null));

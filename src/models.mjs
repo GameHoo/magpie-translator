@@ -1,5 +1,3 @@
-import { execFile } from "node:child_process"
-
 const ID = /^[A-Za-z0-9._~@+-]+\/[A-Za-z0-9._~:+-]+$/
 
 export function modelsFromGateway(body) {
@@ -26,12 +24,10 @@ export function parseModelLines(text) {
   return out
 }
 
-export async function listModels({ baseUrl, gatewayKey, bin = "magpie", env = process.env, timeoutMs = 2500, fetchImpl = globalThis.fetch } = {}) {
+export async function listModels({ baseUrl, gatewayKey, timeoutMs = 2500, fetchImpl = globalThis.fetch } = {}) {
   const gateway = await gatewayModels(baseUrl, gatewayKey, timeoutMs, fetchImpl)
   if (gateway.models.length) return { source: "gateway", models: gateway.models, error: "" }
-  const cli = await cliModels(bin, env, timeoutMs)
-  if (cli.models.length) return { source: "cli", models: cli.models, error: "" }
-  return { source: "none", models: [], error: cli.error || gateway.error || "列不出模型" }
+  return { source: "none", models: [], error: gateway.error || "列不出模型" }
 }
 
 async function gatewayModels(baseUrl, gatewayKey, timeoutMs, fetchImpl) {
@@ -48,12 +44,3 @@ async function gatewayModels(baseUrl, gatewayKey, timeoutMs, fetchImpl) {
   }
 }
 
-function cliModels(bin, env, timeoutMs) {
-  return new Promise((resolve) => {
-    execFile(bin, ["models"], { timeout: timeoutMs, env, maxBuffer: 1_000_000 }, (err, stdout, stderr) => {
-      const models = parseModelLines(`${stdout || ""}\n${stderr || ""}`)
-      const error = err ? String(err.message || err).slice(0, 180) : ""
-      resolve({ models, error })
-    })
-  })
-}

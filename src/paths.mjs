@@ -8,10 +8,6 @@ export function dataDir(env = process.env) {
   return path.join(xdg, "magpie-translator")
 }
 
-export function inboxDir(env = process.env) {
-  return path.join(dataDir(env), "inbox")
-}
-
 export function logPath(env = process.env) {
   return path.join(dataDir(env), "log.jsonl")
 }

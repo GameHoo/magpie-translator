@@ -1,0 +1,10 @@
+{
+  "package": "@magpie-community/page-translator",
+  "name": "Translator",
+  "kind": "page",
+  "community": true,
+  "summary": {
+    "en": "A second model rewrites the final reply in the style of your prompt. The history page shows success rate, latency, filters, a side-by-side view, compare, retry, and copy as JSON or Markdown. Nothing is written back into the session.",
+    "zh": "另一个模型按你的提示词转述最终回复。翻译记录页有成功率、延迟、筛选、并排、对比、重试，以及复制为 JSON 或 Markdown。不会写回原会话。"
+  }
+}

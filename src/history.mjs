@@ -4,9 +4,11 @@ import path from "node:path"
 import { DEFAULT_HISTORY_LIMIT } from "./constants.mjs"
 import { parseHistoryLimit } from "./config.mjs"
 import { dataDir, ensureDir, logPath } from "./paths.mjs"
-import { writeFeed } from "./publish.mjs"
 
 const PUBLIC = ["id", "at", "agent", "model", "translator", "language", "style", "ms", "original", "translation", "error", "status"]
+
+// magpie 的页面一次最多提交 64KiB 的 options。公开记录要连同设置一起放得下。
+export const FEED_BUDGET = 48_000
 
 export function historyPath(env = process.env) {
   return path.join(dataDir(env), "history.json")
@@ -25,7 +27,6 @@ export function recordTranslation(entry, env = process.env, limit = DEFAULT_HIST
   const cap = parseHistoryLimit(limit)
   if (cap === 0) {
     writeHistory([], env)
-    publish([], env)
     return null
   }
   const row = {
@@ -51,7 +52,6 @@ export function recordTranslation(entry, env = process.env, limit = DEFAULT_HIST
   if (!row.id) return null
   const next = [row, ...readHistory(env).filter((item) => item.id !== row.id)].slice(0, cap)
   writeHistory(next, env)
-  publish(next, env)
   return publicEntry(row)
 }
 
@@ -69,7 +69,6 @@ export function addComparison(entryId, comparison, env = process.env) {
     at: comparison.at || new Date().toISOString(),
   })
   writeHistory(rows, env)
-  publish(rows, env)
   return publicEntry(row)
 }
 
@@ -82,7 +81,6 @@ export function replaceTranslation(entryId, patch, env = process.env) {
   row.ms = Number(patch.ms) || 0
   row.status = row.error ? "error" : "done"
   writeHistory(rows, env)
-  publish(rows, env)
   return publicEntry(row)
 }
 
@@ -105,22 +103,52 @@ export function publicEntry(entry) {
   return view
 }
 
-export function publish(rows = readHistory(), env = process.env) {
-  return writeFeed({
-    at: new Date().toISOString(),
-    entries: rows.map(publicEntry),
-  }, env)
+// 页面通过 magpie.options.get() 读到的那一份。最新的在前，超长的丢掉尾巴，
+// 整份超过预算就少放几条。磁盘上的 history.json 仍是全文。
+export function publicFeed(rows = []) {
+  return { at: new Date().toISOString(), entries: fitEntries(rows.map(publicEntry)) }
 }
 
-// 更新会换一个插件目录，feed.js 跟着新目录变成空文件。log.jsonl 还在数据目录里。
-// 把日志里还没进 history.json 的行补回去，再写成 feed。historyLimit 为 0 时不补。
+function fitEntries(entries) {
+  const out = []
+  for (const entry of entries) {
+    if (JSON.stringify([...out, entry]).length <= FEED_BUDGET) {
+      out.push(entry)
+      continue
+    }
+    const room = FEED_BUDGET - JSON.stringify(out).length - 80
+    if (room < 240) break
+    const clipped = clipEntry(entry, room)
+    if (JSON.stringify([...out, clipped]).length > FEED_BUDGET) break
+    out.push(clipped)
+  }
+  return out
+}
+
+function clipEntry(entry, room) {
+  const copy = {
+    ...entry,
+    comparisons: (entry.comparisons || []).map((item) => ({ ...item })),
+  }
+  const shrink = (text, max) => {
+    const value = String(text || "")
+    return value.length <= max ? value : `${value.slice(0, max)}…`
+  }
+  for (let guard = 1; JSON.stringify(copy).length > room && guard < 16; guard += 1) {
+    const max = Math.max(80, Math.floor(6000 / guard))
+    copy.original = shrink(copy.original, max)
+    copy.translation = shrink(copy.translation, max)
+    copy.viewClipped = true
+    for (const item of copy.comparisons) item.translation = shrink(item.translation, max)
+  }
+  return copy
+}
+
+// 把日志里还没进 history.json 的行补回去。historyLimit 为 0 时不补，也不新建文件。
 export function restoreFeed(env = process.env, limit) {
   const cap = parseHistoryLimit(limit)
   const current = readHistory(env)
-  if (cap === 0) {
-    publish(current, env)
-    return current
-  }
+  if (cap === 0) return current
   const seen = new Set(current.map(signature))
   const added = []
   for (const row of readLogRows(env)) {
@@ -135,7 +163,6 @@ export function restoreFeed(env = process.env, limit) {
     if (rows.length > cap) rows = rows.slice(0, cap)
     writeHistory(rows, env)
   }
-  publish(rows, env)
   return rows
 }
 

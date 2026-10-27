@@ -6,7 +6,7 @@ import { DEFAULT_HISTORY_LIMIT, DEFAULT_TRANSLATE_TIMEOUT_MS } from "./constants
 export const DEFAULT_LANGUAGE = "简体中文"
 export const DEFAULT_DISPLAY = ["log"]
 
-const DISPLAYS = new Set(["panel", "log", "file", "stdout", "notify", "webhook"])
+const DISPLAYS = new Set(["log", "file", "stdout", "notify", "webhook"])
 const MAX_NOTE = 4000
 
 export function parseDisplay(value) {
@@ -52,7 +52,6 @@ export function presentation(options = {}, rule = {}) {
     webhookUrl: httpUrl(text(rule.webhookUrl, options.webhookUrl)),
     translateTimeoutMs: parseTimeout(options.translateTimeoutMs),
     rewriteSameLanguage: rewrite,
-    localPanel: parseFlag(options.localPanel, false),
     historyLimit: parseHistoryLimit(options.historyLimit),
   }
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import test from "node:test"
+import { test } from "bun:test"
 import { onResponse } from "../src/hooks.mjs"
 import { skipReason } from "../src/turn.mjs"
 
@@ -35,8 +35,11 @@ test("纯 JSON、结构化输出、标题请求和没有用户轮次的请求都
 test("建议 JSON 不会进收件箱，普通回复会", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-skip-"))
   process.env.MAGPIE_TRANSLATOR_HOME = home
-  process.env.MAGPIE_TRANSLATOR_NO_SPAWN = "1"
-  const options = { rules: [{ translator: "mock/zh" }] }
+  process.env.XDG_CONFIG_HOME = home
+  const options = { models: [], rules: [{ translator: "mock/zh" }] }
+  const fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: "译文" } }] }), {
+    headers: { "content-type": "application/json" },
+  })
   const suggestion = { choices: [{ message: { content: '{"suggestion":"你用的是什么模型？"}' }, finish_reason: "stop" }] }
   await onResponse(suggestion, {
     success: true,
@@ -46,6 +49,7 @@ test("建议 JSON 不会进收件箱，普通回复会", async () => {
     request: { model: "work/model", messages: [{ role: "user", content: "hi" }] },
     state: {},
     options,
+    fetch,
   })
   const prose = { choices: [{ message: { content: "The cache invalidates when the file mtime changes." }, finish_reason: "stop" }] }
   await onResponse(prose, {
@@ -56,11 +60,10 @@ test("建议 JSON 不会进收件箱，普通回复会", async () => {
     request: { model: "work/model", messages: [{ role: "user", content: "hi" }] },
     state: {},
     options,
+    fetch,
   })
-  const dir = path.join(home, "inbox")
-  const names = fs.readdirSync(dir).filter((name) => name.endsWith(".json"))
-  assert.equal(names.length, 1)
-  const job = JSON.parse(fs.readFileSync(path.join(dir, names[0]), "utf8"))
-  assert.match(job.original, /mtime/)
+  const saved = JSON.parse(fs.readFileSync(path.join(home, "history.json"), "utf8"))
+  assert.equal(saved.length, 1)
+  assert.match(saved[0].original, /mtime/)
   fs.rmSync(home, { recursive: true, force: true })
 })
