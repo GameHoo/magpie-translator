@@ -40,6 +40,7 @@ test("翻译失败时面板留下原文和错误，不抛回调用方", async ()
       state: {},
       options: {
         magpieBaseUrl: mock.url,
+        display: ["panel", "log"],
         rules: [{ model: "gpt-5.4", translator: "mock/translator-zh" }],
       },
     })

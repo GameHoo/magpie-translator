@@ -36,7 +36,7 @@ test("失败、不匹配、工具轮、以及翻译请求自己，都不写收�
   const reply = {
     output: [{ type: "message", phase: "final_answer", content: [{ type: "output_text", text: "The cache invalidates." }] }],
   }
-  await onResponse(reply, { success: false, options: rule, agent: "codex", model: "gpt-5.4", protocol: "responses", request: { model: "gpt-5.4" }, state: {} })
+  await onResponse({ status: "failed", output: [] }, { success: false, options: rule, agent: "codex", model: "gpt-5.4", protocol: "responses", request: { model: "gpt-5.4" }, state: {} })
   await onResponse(reply, { success: true, options: rule, agent: "claude", model: "gpt-5.4", protocol: "responses", request: { model: "gpt-5.4" }, state: {} })
   await onResponse({
     output: [{ type: "function_call", name: "bash", arguments: "{}", call_id: "c1" }],
@@ -75,8 +75,54 @@ test("onResponse 不改回复对象，收件箱里是原文而不是译文", asy
   assert.equal(job.original, "The cache invalidates when the file mtime changes.")
   assert.equal(job.translator, "deepseek/deepseek-chat")
   assert.equal(job.language, "简体中文")
-  assert.deepEqual(job.display, ["panel", "log"])
+  assert.deepEqual(job.display, ["log"])
   assert.equal(job.masked.includes("文件"), false)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("success 为 false 但回复里仍有正文时入队", async () => {
+  const home = tempHome()
+  const reply = {
+    status: "incomplete",
+    output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "The read stays linearizable." }] }],
+  }
+  await onResponse(reply, {
+    success: false,
+    options: rule,
+    agent: "codex",
+    protocol: "responses",
+    model: "gpt-5.4",
+    request: { model: "gpt-5.4", input: [{ role: "user", content: "explain" }] },
+    state: {},
+  })
+  assert.equal(jobs(home).length, 1)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("原文已经是目标语言时默认跳过，打开改写后仍入队", async () => {
+  const home = tempHome()
+  const reply = { choices: [{ message: { role: "assistant", content: "你用的是什么模型？" }, finish_reason: "stop" }] }
+  const request = { model: "gpt-5.4", messages: [{ role: "user", content: "问一下" }] }
+  await onResponse(reply, {
+    success: true,
+    protocol: "chat",
+    agent: "codex",
+    model: "gpt-5.4",
+    request,
+    state: {},
+    options: { language: "简体中文", rules: [{ translator: "mock/zh" }] },
+  })
+  assert.equal(jobs(home).length, 0)
+  await onResponse(reply, {
+    success: true,
+    protocol: "chat",
+    agent: "codex",
+    model: "gpt-5.4",
+    request,
+    state: {},
+    options: { language: "简体中文", rewriteSameLanguage: true, rules: [{ translator: "mock/zh" }] },
+  })
+  assert.equal(jobs(home).length, 1)
   fs.rmSync(home, { recursive: true, force: true })
 })
 
