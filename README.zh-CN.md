@@ -52,6 +52,18 @@ English: [README.md](README.md). Design notes and the checks that were run: [doc
 
 4. 让工作模型经 magpie 回答一轮。把 magpie 已经在路由的客户端（Codex、Claude Code 或其他客户端）指到 magpie，再问它一句。然后打开 <http://127.0.0.1:44721>。还没有命中的回复时，页面上写着还没有译文。命中之后，卡片上的语言、工作模型和翻译模型来自这一轮的配置。页面上的按钮和说明是中文。译文用的是卡片上的 `language`，不是页面外壳的语言。
 
+下面两张图是 2026-10-27 用 `npm run demo` 打开的页面，窗口宽 1440 像素。标题和按钮是中文。卡片上的语言行是这一轮的 `language`，这两张图里是 `简体中文`。
+
+翻译完成时，围栏里的命令保持原样。文件：`docs/panel_success.png`。
+
+![完成的卡片。状态是已转述。译文是两句中文，命令 stat -c %Y file 留在代码块里。](docs/panel_success.png)
+
+翻译模型连不上时，卡片留下原句，并写出错误。文件：`docs/panel_failure.png`。
+
+![失败的卡片。状态是转述失败。错误是 fetch failed。原英文句子还在卡片上。](docs/panel_failure.png)
+
+`npm run demo` 用的是本机假的翻译模型，所以这次失败是连不上。真实翻译模型返回错误时，错误文字出现在同一位置。
+
 `package.json` 里的 `magpie.options` 只是示例。生效的是 `magpie plugin options` 写进去的那份。
 
 ## 规则怎么匹配
