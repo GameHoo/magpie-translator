@@ -13,16 +13,30 @@ import { translateJob } from "../src/translate.mjs"
 
 test("默认提示词带上目标语言，自定义提示词换掉任务句", () => {
   const fallback = systemPrompt({ language: "日本語" })
-  assert.match(fallback, /日本語/)
+  assert.match(fallback, /Rewrite the user's text into plain, easy-to-read 日本語\./)
   assert.match(fallback, new RegExp(MARKER))
   assert.match(fallback, /⟦0⟧/)
+  assert.equal(/[\u4e00-\u9fff]/.test(fallback.replaceAll("日本語", "")), false)
 
   const custom = systemPrompt({ prompt: "用我的口吻解释", language: "English", style: "短句。" })
   assert.match(custom, /用我的口吻解释/)
   assert.match(custom, /短句。/)
-  assert.equal(custom.includes("通俗易懂的English"), false)
+  assert.equal(custom.includes("Rewrite the user's text into plain, easy-to-read English"), false)
   assert.match(custom, new RegExp(MARKER))
-  assert.match(custom, /⟦0⟧/)
+  assert.match(custom, /Output only the rewritten text/)
+})
+
+test("非中文目标语言写进默认提示词，提示本身不含中文", () => {
+  const french = systemPrompt({ language: "Français" })
+  assert.match(french, /Rewrite the user's text into plain, easy-to-read Français\./)
+  assert.equal(/[\u4e00-\u9fff]/.test(french), false)
+  assert.match(french, new RegExp(MARKER))
+  assert.match(french, /⟦1⟧/)
+  assert.match(french, /Output only the rewritten text/)
+
+  const english = systemPrompt({ language: "English" })
+  assert.match(english, /easy-to-read English\./)
+  assert.equal(english.includes("简体中文"), false)
 })
 
 test("展示出口认别名，不认识的名字退回默认", () => {
@@ -33,9 +47,9 @@ test("展示出口认别名，不认识的名字退回默认", () => {
 })
 
 test("规则上的语言、提示词、展示和翻译模型盖过全局", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "plain-zh-cfg-"))
-  process.env.MAGPIE_PLAIN_ZH_HOME = home
-  process.env.MAGPIE_PLAIN_ZH_NO_SPAWN = "1"
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-cfg-"))
+  process.env.MAGPIE_TRANSLATOR_HOME = home
+  process.env.MAGPIE_TRANSLATOR_NO_SPAWN = "1"
   const reply = { choices: [{ message: { role: "assistant", content: "Hello from any model." }, finish_reason: "stop" }] }
   await onResponse(reply, {
     success: true,
@@ -102,7 +116,7 @@ test("运行时代码不内置厂商模型表", () => {
 })
 
 test("只要日志、文件和 webhook 时不打开网页", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "plain-zh-sink-"))
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-sink-"))
   const hits = []
   const webhook = http.createServer((req, res) => {
     const chunks = []
