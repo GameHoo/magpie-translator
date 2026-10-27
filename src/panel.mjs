@@ -1,11 +1,15 @@
 #!/usr/bin/env node
+import { randomBytes, timingSafeEqual } from "node:crypto"
 import fs from "node:fs"
 import http from "node:http"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { parseDisplay } from "./config.mjs"
-import { DEFAULT_PANEL_PORT } from "./constants.mjs"
-import { dataDir, ensureDir, inboxDir, logPath } from "./paths.mjs"
+import { DEFAULT_GATEWAY_KEY, DEFAULT_PANEL_PORT } from "./constants.mjs"
+import { listModels } from "./models.mjs"
+import { findPlugin, loadSettings, packageRoot, readPluginList, saveSettings } from "./options.mjs"
+import { dataDir, ensureDir, inboxDir, logPath, magpieBaseUrl } from "./paths.mjs"
+import { SETTINGS_PAGE } from "./settings-page.mjs"
 import { persistItem } from "./sinks.mjs"
 import { translateJob } from "./translate.mjs"
 
@@ -15,13 +19,29 @@ export function startPanel(options = {}) {
   const home = options.home || dataDir()
   const port = options.port ?? Number(process.env.MAGPIE_TRANSLATOR_PORT || DEFAULT_PANEL_PORT)
   const startupDisplay = parseDisplay(options.display ?? process.env.MAGPIE_TRANSLATOR_DISPLAY)
-  const env = { ...process.env, MAGPIE_TRANSLATOR_HOME: home }
+  const env = { ...process.env, ...options.env, MAGPIE_TRANSLATOR_HOME: home }
   const state = { items: [], clients: new Set(), inflight: new Set() }
+  const session = {
+    csrf: options.csrfToken || randomBytes(32).toString("hex"),
+    maxBody: options.maxBody || 256 * 1024,
+    locate: {
+      spec: options.pluginSpec || env.MAGPIE_TRANSLATOR_PLUGIN || "",
+      root: packageRoot(),
+    },
+    listModels: options.listModels,
+    port: 0,
+  }
   ensureDir(home)
   ensureDir(inboxDir(env))
-  const server = http.createServer((req, res) => handle(req, res, env, state))
+  const server = http.createServer((req, res) => {
+    Promise.resolve(handle(req, res, env, state, session)).catch((err) => {
+      if (!res.headersSent) sendJson(res, { error: "面板内部错误" }, 500)
+      console.error(err)
+    })
+  })
   let listening = null
   let boundPort = null
+  let boundHost = null
   function openHttp() {
     if (listening) return listening
     listening = new Promise((resolve, reject) => {
@@ -30,7 +50,10 @@ export function startPanel(options = {}) {
         reject(err)
       })
       server.listen(port, "127.0.0.1", () => {
-        boundPort = server.address().port
+        const info = server.address()
+        boundPort = info.port
+        boundHost = info.address
+        session.port = boundPort
         resolve(boundPort)
       })
     })
@@ -41,6 +64,7 @@ export function startPanel(options = {}) {
   timer.unref?.()
   const api = {
     get port() { return boundPort },
+    get host() { return boundHost },
     get url() { return boundPort ? `http://127.0.0.1:${boundPort}` : null },
     home,
     close() {
@@ -61,41 +85,202 @@ export function startPanel(options = {}) {
   })
 }
 
-function handle(req, res, env, state) {
+async function handle(req, res, env, state, guard) {
   const url = new URL(req.url || "/", "http://127.0.0.1")
+  if (!boundHostOk(req, guard)) return sendJson(res, { error: "forbidden" }, 403)
   if (req.method === "GET" && url.pathname === "/favicon.ico") {
-    res.writeHead(204)
+    res.writeHead(204, safeHeaders())
     res.end()
     return
   }
   if (req.method === "GET" && url.pathname === "/") return page(res)
+  if (req.method === "GET" && url.pathname === "/settings") return settingsPage(res)
   if (req.method === "GET" && url.pathname === "/health") return sendJson(res, { name: "magpie-translator", ok: true })
   if (req.method === "GET" && url.pathname === "/api/items") return sendJson(res, { items: state.items.map(publicItem) })
+  if (req.method === "GET" && url.pathname === "/api/settings") return sendJson(res, settingsBody(env, guard))
+  if (req.method === "GET" && url.pathname === "/api/models") return sendJson(res, await modelBody(env, guard))
+  if (url.pathname === "/api/settings" && req.method === "POST") return saveBody(req, res, env, guard)
+  if (url.pathname === "/api/settings") return sendJson(res, { error: "forbidden" }, 403)
   if (req.method === "GET" && url.pathname === "/latest.txt") return sendText(res, latestText(state))
   if (req.method === "GET" && url.pathname === "/events") return events(req, res, state)
   if (req.method === "GET" && url.pathname === "/log.jsonl") return sendText(res, readLog(env))
   sendJson(res, { error: "not found" }, 404)
 }
 
+function boundHostOk(req, guard) {
+  const host = String(req.headers.host || "").toLowerCase()
+  const port = String(guard.port || "")
+  if (!port) return false
+  return host === `127.0.0.1:${port}` || host === `localhost:${port}`
+}
+
 function page(res) {
-  res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
+  res.writeHead(200, { ...safeHeaders(), "content-type": "text/html; charset=utf-8" })
   res.end(PAGE)
 }
 
+function settingsPage(res) {
+  res.writeHead(200, { ...safeHeaders(), "content-type": "text/html; charset=utf-8" })
+  res.end(SETTINGS_PAGE)
+}
+
+function safeHeaders() {
+  return {
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+  }
+}
+
 function sendJson(res, body, status = 200) {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" })
+  res.writeHead(status, { ...safeHeaders(), "content-type": "application/json; charset=utf-8" })
   res.end(JSON.stringify(body))
 }
 
 function sendText(res, body) {
-  res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" })
+  res.writeHead(200, { ...safeHeaders(), "content-type": "text/plain; charset=utf-8" })
   res.end(body)
+}
+
+function settingsBody(env, session) {
+  const loaded = loadSettings(env, session.locate)
+  return {
+    csrf: session.csrf,
+    found: loaded.found,
+    file: loaded.file,
+    spec: loaded.spec,
+    off: loaded.off,
+    error: loaded.error,
+    options: loaded.options,
+    preserved: loaded.options.preserved,
+    displays: ["panel", "log", "file", "stdout", "notify", "webhook"],
+    placeholders: ["{language}", "{style}", "{model}", "{translator}"],
+  }
+}
+
+async function modelBody(env, session) {
+  try {
+    if (session.listModels) return await session.listModels()
+    return await listConfiguredModels(env, session)
+  } catch (err) {
+    return { source: "none", models: [], error: String(err?.message || err).slice(0, 180) }
+  }
+}
+
+async function listConfiguredModels(env, session) {
+  let baseUrl = magpieBaseUrl({}, env)
+  let gatewayKey = DEFAULT_GATEWAY_KEY
+  try {
+    const { list } = readPluginList(env)
+    const entry = findPlugin(list, env, session.locate)
+    const raw = entry?.options || {}
+    baseUrl = magpieBaseUrl(raw, env)
+    if (typeof raw.gatewayKey === "string" && raw.gatewayKey.trim()) gatewayKey = raw.gatewayKey.trim()
+  } catch { /* 没有配置文件时仍试本机网关 */ }
+  const listed = await listModels({
+    baseUrl,
+    gatewayKey,
+    bin: env.MAGPIE_BIN || "magpie",
+    env,
+  })
+  return { source: listed.source, models: listed.models, error: listed.error || "" }
+}
+
+async function saveBody(req, res, env, session) {
+  if (!mutationOk(req, res, session)) return
+  let input
+  try {
+    input = JSON.parse(await readBody(req, session.maxBody))
+  } catch (err) {
+    const status = err.status || 400
+    sendJson(res, { error: status === 413 ? "请求太大" : "设置不是合法 JSON" }, status)
+    return
+  }
+  try {
+    const saved = saveSettings(input, env, session.locate)
+    sendJson(res, {
+      ok: true,
+      changed: saved.changed,
+      spec: saved.spec,
+      file: saved.file,
+      options: saved.options,
+      preserved: saved.preserved,
+    })
+  } catch (err) {
+    sendJson(res, { error: err.message || "没有保存" }, err.status || 500)
+  }
+}
+
+function mutationOk(req, res, session) {
+  if (!originOk(req, session.port)) return deny(res)
+  if (!refererOk(req, session.port)) return deny(res)
+  const site = req.headers["sec-fetch-site"]
+  if (site && site !== "same-origin" && site !== "none") return deny(res)
+  if (!csrfOk(req, session.csrf)) return deny(res)
+  const type = String(req.headers["content-type"] || "").toLowerCase()
+  if (!type.includes("application/json")) {
+    sendJson(res, { error: "content-type 必须是 application/json" }, 415)
+    return false
+  }
+  return true
+}
+
+function deny(res) {
+  sendJson(res, { error: "forbidden" }, 403)
+  return false
+}
+
+function originOk(req, port) {
+  const origin = req.headers.origin
+  if (!origin) return true
+  return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`
+}
+
+function refererOk(req, port) {
+  const referer = req.headers.referer || req.headers.referrer
+  if (!referer) return true
+  try {
+    const url = new URL(referer)
+    const host = url.hostname.toLowerCase()
+    return (host === "127.0.0.1" || host === "localhost") && url.port === String(port)
+  } catch {
+    return false
+  }
+}
+
+function csrfOk(req, token) {
+  const got = req.headers["x-magpie-translator-csrf"]
+  if (typeof got !== "string" || Buffer.byteLength(got) !== Buffer.byteLength(token)) return false
+  return timingSafeEqual(Buffer.from(got), Buffer.from(token))
+}
+
+function readBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    let size = 0
+    let failed = false
+    req.on("data", (chunk) => {
+      if (failed) return
+      size += chunk.length
+      if (size > limit) {
+        failed = true
+        const error = new Error("too large")
+        error.status = 413
+        reject(error)
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on("end", () => { if (!failed) resolve(Buffer.concat(chunks).toString("utf8")) })
+    req.on("error", (err) => { if (!failed) reject(err) })
+  })
 }
 
 function events(req, res, state) {
   res.writeHead(200, {
+    ...safeHeaders(),
     "content-type": "text/event-stream; charset=utf-8",
-    "cache-control": "no-cache",
     connection: "keep-alive",
   })
   res.write(`data: ${JSON.stringify({ type: "snapshot", items: state.items.map(publicItem) })}\n\n`)
@@ -259,6 +444,8 @@ const PAGE = `<!doctype html>
   h1 { font-size: 40px; font-weight: 560; margin: 12px 0 8px; letter-spacing: 0.04em; }
   header p, footer { color: var(--muted); }
   header p { margin: 0; max-width: 64ch; }
+  nav { margin-top: 14px; font-family: ui-sans-serif, "Noto Sans CJK SC", sans-serif; font-size: 14px; }
+  nav a { color: var(--seal); }
   .empty {
     margin: 28px 0;
     padding: 28px;
@@ -319,6 +506,7 @@ const PAGE = `<!doctype html>
   <span class="seal">旁路</span>
   <h1>转述</h1>
   <p>工作模型的原文会原样回到 Codex、Claude Code 和其他客户端的会话里。这里只展示译文。目标语言由 language 决定，默认是简体中文，可以写成 English、日本語、Français 这类任意名字。译文不写进下一轮发给原模型的请求。</p>
+  <nav><a href="/settings">设置</a></nav>
 </header>
 <main>
   <div class="empty" id="empty">还没有转述。命中规则的工作模型说完一轮最终回复后，转述会出现在这里。</div>
