@@ -35,6 +35,7 @@ function ensurePanel(job, env) {
       MAGPIE_TRANSLATOR_PORT: String(port),
       MAGPIE_TRANSLATOR_HOME: home,
       MAGPIE_TRANSLATOR_DISPLAY: Array.isArray(job.display) ? job.display.join(",") : "",
+      MAGPIE_TRANSLATOR_LOCAL: job.localPanel ? "1" : "0",
     },
   })
   fs.writeSync(fd, String(child.pid))
