@@ -1,53 +1,139 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>旁路转述</title>
-<link rel="stylesheet" href="history.css">
+<title>magpie-translator · 设置</title>
+<link rel="stylesheet" href="style.css">
 </head>
-<body>
-<main id="app">
-  <h1>旁路转述</h1>
-  <p class="note">工作模型的原文仍回到原来的会话。这里只决定用哪个模型、译成什么语言、以及哪些回复要译。</p>
-  <p id="status">正在读取设置…</p>
-  <div id="form" hidden>
-    <label class="field">目标语言
-      <select id="language"></select>
-    </label>
-    <label class="field">语气
-      <select id="stylePreset"></select>
-    </label>
-    <label class="field" id="styleCustomWrap" hidden>自定义语气
-      <textarea id="styleCustom"></textarea>
-    </label>
-    <label class="field">翻译超时
-      <select id="timeout"></select>
-    </label>
-    <label class="field">历史条数
-      <select id="historyLimit"></select>
-    </label>
-    <div class="checks">
-      <label><input id="rewrite" type="checkbox"> 原文已经是目标语言时也改写成更直白的说法</label>
-      <label><input id="localPanel" type="checkbox"> 同时打开本机 127.0.0.1 页面（默认关）</label>
+<body data-page="settings">
+<main class="settings">
+
+  <header class="card plugin-hero">
+    <div class="logo"><svg class="i"><use href="#i-translate"/></svg></div>
+    <div style="flex:1;min-width:0">
+      <h1>magpie-translator <span class="ver" id="ver">v0.1.0</span></h1>
+      <p data-i18n="hero.desc">Agent 工作时，由另一个模型把它的最终回复改写成你的语言。译文单独显示，不会写回会话；代码与命令保持原样。</p>
     </div>
-    <div class="field">展示
-      <div class="checks" id="display"></div>
+    <div class="hero-stat"><span class="live-dot" id="liveDot"></span><span id="heroStatus">运行中 · 今日已翻译 0 条</span></div>
+    <label class="switch" title="启用插件"><input type="checkbox" id="enabled" checked data-dirty><span class="track"></span></label>
+  </header>
+
+  <section class="section">
+    <div class="section-head"><div><h2 data-i18n="out.title">输出</h2><p data-i18n="out.sub">译成什么语言、用什么口吻。</p></div></div>
+    <div class="card">
+      <div class="row">
+        <div class="label"><b data-i18n="out.lang">目标语言</b><small data-i18n="out.lang.sub">规则里可以为单个模型覆盖</small></div>
+        <select class="select" id="lang" data-dirty style="min-width:168px">
+          <option>简体中文</option><option>繁體中文</option><option>English</option><option>日本語</option>
+          <option>한국어</option><option>Español</option><option>Français</option><option>Deutsch</option>
+          <option>Português</option><option>Русский</option>
+        </select>
+      </div>
+      <div class="row stack">
+        <div class="row-top"><div class="label"><b data-i18n="out.style">风格</b><small data-i18n="out.style.sub">影响提示词里的 {style}</small></div></div>
+        <div class="preset-grid" role="radiogroup" data-group="style" id="styleGrid">
+          <button class="preset" type="button" aria-pressed="true" data-style="plain"><b>直白人话</b><span>去掉黑话，像同事口头解释</span></button>
+          <button class="preset" type="button" aria-pressed="false" data-style="terms"><b>保留术语</b><span>术语保留英文，首次附中文</span></button>
+          <button class="preset" type="button" aria-pressed="false" data-style="brief"><b>简洁</b><span>只留结论和关键步骤</span></button>
+          <button class="preset" type="button" aria-pressed="false" data-style="full"><b>详细</b><span>完整翻译，不做删减</span></button>
+        </div>
+      </div>
     </div>
-    <label class="field">提示词（空着就用默认任务句）
-      <textarea id="prompt" placeholder="Rewrite the user's text into plain, easy-to-read {language}."></textarea>
-    </label>
-    <p class="note">可用占位符 {language} {style} {model} {translator}。恢复默认会清空这格。</p>
-    <button type="button" id="resetPrompt">恢复默认提示词</button>
-    <h2>规则</h2>
-    <p class="note">从上到下，第一条命中的生效。翻译模型要选一个具体 id。来源模型可以选全部、某一家的全部，或自己写带 * 的式样。</p>
-    <div id="rules"></div>
-    <button type="button" id="addRule">添加规则</button>
-    <p><button type="button" id="save">保存</button></p>
-    <p id="saveStatus" class="note"></p>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><h2 data-i18n="disp.title">显示与行为</h2><p data-i18n="disp.sub">译文出现在哪里，什么时候不翻译。</p></div></div>
+    <div class="card">
+      <div class="row">
+        <div class="label"><b data-i18n="disp.where">译文位置</b><small data-i18n="disp.where.sub">在翻译记录页，不写回会话</small></div>
+        <div class="seg" role="radiogroup" data-group="where" id="where">
+          <button type="button" aria-pressed="false" data-value="below">原文下方</button>
+          <button type="button" aria-pressed="true" data-value="beside">并排</button>
+          <button type="button" aria-pressed="false" data-value="only">仅译文</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="label"><b data-i18n="disp.badge">显示翻译模型标签</b><small data-i18n="disp.badge.sub">在译文角落标出由哪个模型翻译、耗时多少</small></div>
+        <label class="switch"><input type="checkbox" id="badge" checked data-dirty><span class="track"></span></label>
+      </div>
+      <div class="row">
+        <div class="label"><b data-i18n="disp.collapse">默认折叠原文</b><small data-i18n="disp.collapse.sub">只在「原文下方」模式生效</small></div>
+        <label class="switch"><input type="checkbox" id="collapse" data-dirty><span class="track"></span></label>
+      </div>
+      <div class="row">
+        <div class="label"><b data-i18n="disp.skip">原文已是目标语言时跳过</b><small data-i18n="disp.skip.sub">本地检测语言，不调用翻译模型，也不计入历史</small></div>
+        <label class="switch"><input type="checkbox" id="skip" checked data-dirty><span class="track"></span></label>
+      </div>
+      <div class="row">
+        <div class="label"><b><span data-i18n="disp.code">代码块与命令保持原样</span><span class="lock"><svg class="i xs"><use href="#i-lock"/></svg><span data-i18n="common.always">始终开启</span></span></b>
+          <small data-i18n="disp.code.sub">``` 代码块、行内 `code`、路径和命令不会交给翻译模型改写</small></div>
+        <label class="switch"><input type="checkbox" checked disabled><span class="track"></span></label>
+      </div>
+      <div class="row" id="timeoutRow">
+        <div class="label"><b data-i18n="disp.timeout">超时</b><small data-i18n="disp.timeout.sub">超过后放弃本次翻译，记录为「超时」</small></div>
+        <div>
+          <div class="slider"><input type="range" id="timeout" min="0" max="5" step="1" value="5" data-dirty><span class="val" id="timeoutVal">120 s</span></div>
+          <div class="ticks"><span>10</span><span>20</span><span>30</span><span>60</span><span>90</span><span>120</span></div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="label"><b data-i18n="disp.hist">翻译记录保留</b><small data-i18n="disp.hist.sub">保存在本机，超出后删除最旧的</small></div>
+        <select class="select" id="histLimit" data-dirty>
+          <option value="100">最近 100 条</option>
+          <option value="500" selected>最近 500 条</option>
+          <option value="1000">最近 1000 条</option>
+          <option value="5000">最近 5000 条</option>
+          <option value="0">不保存</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <div><h2 data-i18n="rules.title">翻译规则</h2><p data-i18n="rules.sub">从上到下匹配，命中第一条即停止。拖动或用箭头调整顺序。</p></div>
+      <div class="spacer"></div>
+      <span class="chip" id="ruleCount">0 条规则</span>
+    </div>
+    <div class="rules" id="rules"></div>
+    <div class="fallthrough"><svg class="i sm"><use href="#i-info"/></svg><span data-i18n="rules.fall">没有规则命中时不翻译。想兜底，把「所有模型」放在最后一条。</span></div>
+    <button class="add-rule" id="addRule" type="button" style="margin-top:var(--s2)"><svg class="i"><use href="#i-plus"/></svg><span data-i18n="rules.add">添加规则</span></button>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <div><h2 data-i18n="prompt.title">提示词</h2><p data-i18n="prompt.sub">所有规则共用；单条规则可在「高级」里覆盖。</p></div>
+      <div class="spacer"></div>
+      <button class="btn sm ghost" id="resetPrompt" type="button"><svg class="i sm"><use href="#i-reset"/></svg><span data-i18n="prompt.reset">恢复默认</span></button>
+    </div>
+    <div class="card prompt-card">
+      <div class="var-bar">
+        <span class="lbl" data-i18n="prompt.vars">点击插入变量</span>
+        <button class="var-chip" type="button" data-var="{language}">{language}<i>目标语言</i></button>
+        <button class="var-chip" type="button" data-var="{style}">{style}<i>风格</i></button>
+        <button class="var-chip" type="button" data-var="{model}">{model}<i>原始模型</i></button>
+        <button class="var-chip" type="button" data-var="{translator}">{translator}<i>翻译模型</i></button>
+      </div>
+      <div class="editor"><textarea class="textarea" id="prompt" spellcheck="false" data-dirty></textarea></div>
+      <div class="editor-foot"><span id="promptState">默认提示词</span><span class="spacer"></span><span id="promptCount">0 字</span></div>
+      <div class="preview-line"><span class="tag" data-i18n="prompt.preview">预览</span><span id="promptPreview"></span></div>
+    </div>
+  </section>
+
+  <div class="savebar-wrap">
+    <div class="savebar" id="savebar">
+      <div class="save-state"><span class="sd"></span><span id="saveText">已保存</span></div>
+      <span class="spacer"></span>
+      <button class="btn ghost discard" id="discard" type="button" data-i18n="save.discard">放弃更改</button>
+      <button class="btn primary" id="save" type="button" disabled><svg class="i sm"><use href="#i-check"/></svg><span data-i18n="save.save">保存</span></button>
+    </div>
   </div>
 </main>
+<div class="toast" id="toast"><svg class="i sm"><use href="#i-check"/></svg><span></span></div>
+<script src="_magpie/bridge.js"></script>
 <script src="catalog.js"></script>
-<script src="settings.js"></script>
+<script src="feed.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
