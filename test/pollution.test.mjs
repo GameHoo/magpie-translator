@@ -110,9 +110,9 @@ function anthropicSse(text, { tool = false } = {}) {
 }
 
 test("下一轮发给原模型的请求不含译文", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "plain-zh-proof-"))
-  process.env.MAGPIE_PLAIN_ZH_HOME = home
-  process.env.MAGPIE_PLAIN_ZH_NO_SPAWN = "1"
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-proof-"))
+  process.env.MAGPIE_TRANSLATOR_HOME = home
+  process.env.MAGPIE_TRANSLATOR_NO_SPAWN = "1"
   const translator = await listen((_req, res, body) => {
     const json = JSON.parse(body)
     assert.equal(json.messages[0].content.includes(MARKER), true)
