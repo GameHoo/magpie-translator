@@ -10,12 +10,9 @@
     "src",
     "ui",
     "README.md",
-    "README.zh-CN.md",
+    "README.en.md",
     "docs/DESIGN.md",
     "docs/icon.svg",
-    "docs/panel_success.png",
-    "docs/panel_failure.png",
-    "docs/panel_settings.png",
     "LICENSE"
   ],
   "scripts": {
