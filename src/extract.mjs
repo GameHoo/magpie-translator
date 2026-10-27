@@ -9,17 +9,28 @@ export function extractUserText(reply, protocol) {
     return { text: "", skip: "empty", protocol: proto }
   }
   const parts = collectParts(reply, proto)
-  const tools = parts.some((p) => p.kind === "tool")
-  const texts = []
-  for (const part of parts) {
-    if (part.kind !== "text" || !part.text) continue
-    if (part.phase === "commentary") continue
-    if (tools && part.phase !== "final") continue
-    texts.push(part.text)
+  parts.forEach((part, index) => { part.index = index })
+  const texts = pickTexts(parts, proto)
+  let text = texts.map((part) => part.text).join("\n\n")
+  if (!text.trim() && proto === "responses" && typeof reply.output_text === "string") text = reply.output_text
+  if (!text.trim()) {
+    const tools = parts.some((part) => part.kind === "tool")
+    return { text: "", skip: tools ? "tool_round" : "no_text", protocol: proto }
   }
-  const text = texts.join("\n\n")
-  if (!text.trim()) return { text: "", skip: tools ? "tool_round" : "no_text", protocol: proto }
   return { text, skip: null, protocol: proto }
+}
+
+// Responses：有 phase=final 的正文只留那些。没有这标记时，没有工具就留下非铺垫正文；
+// 有工具时只留下最后一个工具调用之后的正文。铺垫句在工具前面，最后一条用户可见的回答在工具后面。
+function pickTexts(parts, proto) {
+  const texts = parts.filter((part) => part.kind === "text" && part.text && part.phase !== "commentary")
+  const finals = texts.filter((part) => part.phase === "final")
+  if (finals.length) return finals
+  const tools = parts.some((part) => part.kind === "tool")
+  if (proto !== "responses") return tools ? [] : texts
+  if (!tools) return texts
+  const lastTool = parts.reduce((at, part, index) => (part.kind === "tool" ? index : at), -1)
+  return texts.filter((part) => part.index > lastTool)
 }
 
 export function normalizeProtocol(protocol) {
@@ -125,6 +136,7 @@ function messageText(item) {
       else if (part.type === "refusal" && typeof part.refusal === "string") bits.push(part.refusal)
     }
   }
+  if (!bits.length && typeof item.text === "string") bits.push(item.text)
   return bits.join("\n\n")
 }
 
