@@ -24,9 +24,9 @@ function listen(status, body) {
 }
 
 test("翻译失败时面板留下原文和错误，不抛回调用方", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "plain-zh-fail-"))
-  process.env.MAGPIE_PLAIN_ZH_HOME = home
-  process.env.MAGPIE_PLAIN_ZH_NO_SPAWN = "1"
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-fail-"))
+  process.env.MAGPIE_TRANSLATOR_HOME = home
+  process.env.MAGPIE_TRANSLATOR_NO_SPAWN = "1"
   const mock = await listen(500, JSON.stringify({ error: { message: "upstream down" } }))
   const panel = await startPanel({ home, port: 0 })
   try {
@@ -59,7 +59,7 @@ test("翻译失败时面板留下原文和错误，不抛回调用方", async ()
     assert.match(latest, /转述失败/)
     assert.match(latest, /mtime/)
     const health = await (await fetch(`${panel.url}/health`)).json()
-    assert.equal(health.name, "magpie-plain-zh")
+    assert.equal(health.name, "magpie-translator")
     const page = await (await fetch(`${panel.url}/`)).text()
     assert.match(page, /不写进下一轮/)
   } finally {

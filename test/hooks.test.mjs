@@ -8,9 +8,9 @@ import { onRequest, onResponse } from "../src/hooks.mjs"
 import { systemPrompt } from "../src/prompt.mjs"
 
 function tempHome() {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "plain-zh-"))
-  process.env.MAGPIE_PLAIN_ZH_HOME = home
-  process.env.MAGPIE_PLAIN_ZH_NO_SPAWN = "1"
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-"))
+  process.env.MAGPIE_TRANSLATOR_HOME = home
+  process.env.MAGPIE_TRANSLATOR_NO_SPAWN = "1"
   return home
 }
 
@@ -81,10 +81,10 @@ test("onResponse 不改回复对象，收件箱里是原文而不是译文", asy
 })
 
 test("旁路写盘失败时 onResponse 仍然正常返回", async () => {
-  const blocker = path.join(os.tmpdir(), `plain-zh-block-${process.pid}`)
+  const blocker = path.join(os.tmpdir(), `translator-block-${process.pid}`)
   fs.writeFileSync(blocker, "not a directory")
-  process.env.MAGPIE_PLAIN_ZH_HOME = path.join(blocker, "child")
-  process.env.MAGPIE_PLAIN_ZH_NO_SPAWN = "1"
+  process.env.MAGPIE_TRANSLATOR_HOME = path.join(blocker, "child")
+  process.env.MAGPIE_TRANSLATOR_NO_SPAWN = "1"
   const reply = { choices: [{ message: { role: "assistant", content: "Hello from the model." }, finish_reason: "stop" }] }
   await assert.doesNotReject(() => onResponse(reply, {
     success: true,
