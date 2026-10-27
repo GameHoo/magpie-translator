@@ -7,14 +7,15 @@ import { pathToFileURL } from "node:url"
 import { parseDisplay, parseFlag } from "./config.mjs"
 import { DEFAULT_GATEWAY_KEY, DEFAULT_PANEL_PORT } from "./constants.mjs"
 import { noteCompare } from "./hooks.mjs"
-import { addComparison, recordTranslation, replaceTranslation } from "./history.mjs"
+import { addComparison, recordTranslation, replaceTranslation, restoreFeed } from "./history.mjs"
 import { listModels } from "./models.mjs"
-import { findPlugin, loadSettings, packageRoot, readPluginList, saveSettings } from "./options.mjs"
+import { findPlugin, loadSettings, packageRoot, pluginTurnedOff, readPluginList, saveSettings } from "./options.mjs"
 import { dataDir, ensureDir, inboxDir, logPath, magpieBaseUrl } from "./paths.mjs"
 import { writeCatalog } from "./publish.mjs"
 import { SETTINGS_PAGE } from "./settings-page.mjs"
 import { persistItem } from "./sinks.mjs"
 import { translateJob } from "./translate.mjs"
+import { formatPid, releasePidfile, workerStamp } from "./worker.mjs"
 
 const MAX_ITEMS = 200
 
@@ -35,6 +36,7 @@ export function startPanel(options = {}) {
   }
   ensureDir(home)
   ensureDir(inboxDir(env))
+  try { restoreFeed(env, configuredHistoryLimit(env, session.locate)) } catch (err) { console.error(err) }
   const server = http.createServer((req, res) => {
     Promise.resolve(handle(req, res, env, state, session)).catch((err) => {
       if (!res.headersSent) sendJson(res, { error: "面板内部错误" }, 500)
@@ -74,6 +76,35 @@ export function startPanel(options = {}) {
     every(() => { refreshCatalog(env, session).catch((err) => console.error(err)) }, 60_000)
     refreshCatalog(env, session).catch((err) => console.error(err))
   }
+  let retiring = false
+  function retire() {
+    if (retiring || state.inflight.size > 0) return
+    retiring = true
+    for (const id of timers) clearInterval(id)
+    for (const client of state.clients) client.end()
+    state.clients.clear()
+    const finish = () => {
+      if (typeof options.whenOff === "function") options.whenOff()
+      else if (options.exitOnOff) {
+        releasePidfile(path.join(home, "panel.pid"))
+        process.exit(0)
+      }
+    }
+    if (!boundPort) finish()
+    else server.close(() => finish())
+  }
+  const watchOff = backgroundWork(env) || typeof options.whenOff === "function"
+  if (watchOff) {
+    const look = () => {
+      try {
+        if (pluginTurnedOff(env, session.locate)) retire()
+      } catch (err) {
+        console.error(err)
+      }
+    }
+    every(look, options.offInterval || 1000)
+    look()
+  }
   const api = {
     get port() { return boundPort },
     get host() { return boundHost },
@@ -87,12 +118,13 @@ export function startPanel(options = {}) {
       return new Promise((done) => server.close(() => done()))
     },
   }
+  if (retiring) return Promise.resolve(api)
   if (!httpRequested(options)) {
     tick()
     return Promise.resolve(api)
   }
   return openHttp().then(() => {
-    tick()
+    if (!retiring) tick()
     return api
   })
 }
@@ -122,6 +154,10 @@ function pluginOptions(env, locate) {
   } catch {
     return null
   }
+}
+
+function configuredHistoryLimit(env, locate) {
+  return pluginOptions(env, locate)?.historyLimit
 }
 
 async function refreshCatalog(env, session) {
@@ -716,11 +752,14 @@ source.onmessage = (ev) => {
 const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 if (invokedDirectly) {
   const pidfile = path.join(dataDir(), "panel.pid")
+  const release = () => releasePidfile(pidfile)
+  process.once("SIGTERM", () => { release(); process.exit(0) })
+  process.once("SIGINT", () => { release(); process.exit(0) })
   try {
     ensureDir(dataDir())
-    fs.writeFileSync(pidfile, String(process.pid), { mode: 0o600 })
+    fs.writeFileSync(pidfile, formatPid(process.pid, workerStamp()), { mode: 0o600 })
   } catch { /* 面板仍可手动打开 */ }
-  startPanel().then((panel) => {
+  startPanel({ exitOnOff: true }).then((panel) => {
     console.log(panel.url || panel.home)
   }).catch((err) => {
     console.error(err)

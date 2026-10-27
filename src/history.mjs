@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import { DEFAULT_HISTORY_LIMIT } from "./constants.mjs"
 import { parseHistoryLimit } from "./config.mjs"
-import { dataDir, ensureDir } from "./paths.mjs"
+import { dataDir, ensureDir, logPath } from "./paths.mjs"
 import { writeFeed } from "./publish.mjs"
 
 const PUBLIC = ["id", "at", "agent", "model", "translator", "language", "style", "ms", "original", "translation", "error", "status"]
@@ -109,6 +110,80 @@ export function publish(rows = readHistory(), env = process.env) {
     at: new Date().toISOString(),
     entries: rows.map(publicEntry),
   }, env)
+}
+
+// 更新会换一个插件目录，feed.js 跟着新目录变成空文件。log.jsonl 还在数据目录里。
+// 把日志里还没进 history.json 的行补回去，再写成 feed。historyLimit 为 0 时不补。
+export function restoreFeed(env = process.env, limit) {
+  const cap = parseHistoryLimit(limit)
+  const current = readHistory(env)
+  if (cap === 0) {
+    publish(current, env)
+    return current
+  }
+  const seen = new Set(current.map(signature))
+  const added = []
+  for (const row of readLogRows(env)) {
+    const sig = signature(row)
+    if (seen.has(sig)) continue
+    seen.add(sig)
+    added.push(row)
+  }
+  let rows = current
+  if (added.length) {
+    rows = [...current, ...added].sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))
+    if (rows.length > cap) rows = rows.slice(0, cap)
+    writeHistory(rows, env)
+  }
+  publish(rows, env)
+  return rows
+}
+
+function signature(row) {
+  return `${row.at || ""}\0${row.translator || ""}\0${row.original || ""}`
+}
+
+function logId(at, translator, original) {
+  return `log-${createHash("sha256").update(`${at}\0${translator || ""}\0${original}`).digest("hex").slice(0, 16)}`
+}
+
+function readLogRows(env) {
+  let text = ""
+  try { text = fs.readFileSync(logPath(env), "utf8") } catch { return [] }
+  const lines = text.split(/\n/).filter(Boolean).slice(-5000)
+  const rows = []
+  for (const line of lines) {
+    let parsed
+    try { parsed = JSON.parse(line) } catch { continue }
+    if (!parsed || typeof parsed !== "object") continue
+    const at = typeof parsed.at === "string" ? parsed.at : ""
+    const original = typeof parsed.original === "string" ? parsed.original : ""
+    const translation = typeof parsed.translation === "string" ? parsed.translation : ""
+    if (!original && !translation) continue
+    const error = typeof parsed.error === "string" ? parsed.error : ""
+    const ok = parsed.ok !== false && !error
+    rows.push({
+      id: logId(at, parsed.translator, original),
+      at,
+      agent: typeof parsed.agent === "string" ? parsed.agent : "",
+      model: typeof parsed.model === "string" ? parsed.model : "",
+      translator: typeof parsed.translator === "string" ? parsed.translator : "",
+      language: typeof parsed.language === "string" ? parsed.language : "",
+      ms: 0,
+      original,
+      translation: ok ? translation : "",
+      error,
+      status: ok ? "done" : "error",
+      prompt: "",
+      style: "",
+      masked: original,
+      slots: [],
+      magpieBaseUrl: "",
+      truncated: false,
+      comparisons: [],
+    })
+  }
+  return rows
 }
 
 function writeHistory(rows, env) {

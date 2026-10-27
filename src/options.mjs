@@ -100,6 +100,17 @@ export function findPlugin(list, env = process.env, { spec = "", root = "" } = {
   }) || null
 }
 
+// magpie plugin off 把 plugins.json 里这一条的 off 设为 true。找不到条目不算关。
+export function pluginTurnedOff(env = process.env, locate = {}) {
+  try {
+    const { list, missing } = readPluginList(env)
+    if (missing) return false
+    return findPlugin(list, env, locate)?.off === true
+  } catch {
+    return false
+  }
+}
+
 function cleanLine(value, max, label) {
   if (value == null || value === "") return ""
   if (typeof value !== "string") return { error: `${label}必须是字符串` }

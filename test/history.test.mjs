@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { parseHistoryLimit } from "../src/config.mjs"
-import { addComparison, publicEntry, recordTranslation, replaceTranslation } from "../src/history.mjs"
+import { addComparison, publicEntry, recordTranslation, replaceTranslation, restoreFeed } from "../src/history.mjs"
 import { startPanel } from "../src/panel.mjs"
 
 test("历史有上限，公开脚本不含密钥，并且把 < 转义", () => {
@@ -61,6 +61,64 @@ test("不保存会清空历史，5000 条是上限", () => {
   assert.equal(replaced.status, "done")
   assert.equal(recordTranslation({ id: "gone", original: "two", translation: "二" }, env, 0), null)
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "history.json"), "utf8")), [])
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("log.jsonl 里更早的行会补进 feed，已有历史不重复", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-backfill-"))
+  const ui = fs.mkdtempSync(path.join(os.tmpdir(), "translator-backfill-ui-"))
+  const env = { ...process.env, MAGPIE_TRANSLATOR_HOME: home, MAGPIE_TRANSLATOR_UI: ui }
+  const lines = []
+  for (let i = 0; i < 21; i += 1) {
+    lines.push(JSON.stringify({
+      at: `2026-10-01T00:00:${String(i).padStart(2, "0")}.000Z`,
+      agent: "codex",
+      model: "gpt-work",
+      translator: "mock/zh",
+      language: "简体中文",
+      ok: i !== 3,
+      original: `original ${i}`,
+      translation: i === 3 ? "" : `译文 ${i}`,
+      error: i === 3 ? "upstream down" : "",
+    }))
+  }
+  lines.splice(5, 0, "not json")
+  fs.writeFileSync(path.join(home, "log.jsonl"), `${lines.join("\n")}\n`)
+  recordTranslation({
+    id: "already",
+    at: "2026-10-01T00:00:05.000Z",
+    original: "original 5",
+    translation: "译文 5",
+    translator: "mock/zh",
+    prompt: "secret prompt",
+  }, env, 40)
+  const rows = restoreFeed(env, 20)
+  assert.equal(rows.length, 20)
+  assert.equal(rows.some((row) => row.original === "original 0"), false)
+  const kept = rows.find((row) => row.original === "original 5")
+  assert.equal(kept.id, "already")
+  assert.equal(kept.prompt, "secret prompt")
+  const failed = rows.find((row) => row.original === "original 3")
+  assert.equal(failed.status, "error")
+  assert.equal(failed.error, "upstream down")
+  const feed = fs.readFileSync(path.join(ui, "feed.js"), "utf8")
+  assert.match(feed, /译文 20/)
+  assert.equal(feed.includes("secret prompt"), false)
+  assert.equal(feed.includes("original 0"), false)
+  const again = restoreFeed(env, 20)
+  assert.equal(again.length, 20)
+  assert.equal(again.filter((row) => row.original === "original 5").length, 1)
+  fs.rmSync(home, { recursive: true, force: true })
+  fs.rmSync(ui, { recursive: true, force: true })
+})
+
+test("不保存时不从日志把历史补回来", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-backfill0-"))
+  const env = { ...process.env, MAGPIE_TRANSLATOR_HOME: home, MAGPIE_TRANSLATOR_UI: "" }
+  fs.writeFileSync(path.join(home, "log.jsonl"), `${JSON.stringify({ at: "2026-10-02T00:00:00.000Z", ok: true, original: "stay out", translation: "不进" })}\n`)
+  const rows = restoreFeed(env, 0)
+  assert.deepEqual(rows, [])
+  assert.equal(fs.existsSync(path.join(home, "history.json")), false)
   fs.rmSync(home, { recursive: true, force: true })
 })
 
