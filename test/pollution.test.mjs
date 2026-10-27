@@ -131,6 +131,7 @@ test("下一轮发给原模型的请求不含译文", async () => {
     magpieBaseUrl: translator.url,
     gatewayKey: "secret-gateway-key",
     panelPort: panel.port,
+    display: ["panel", "log"],
     rules: [
       { agent: "codex", model: "gpt-5.4", translator: "mock/translator-zh" },
       { agent: "claude", model: "claude-*", translator: "mock/translator-zh" },
