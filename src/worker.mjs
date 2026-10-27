@@ -8,8 +8,8 @@ import { presentation } from "./config.mjs"
 import { recordTranslation, replaceTranslation, addComparison, findHistory, hasSeen, markDelivered, markSeen, restoreFeed, wasDelivered, writePublicFeed } from "./history.mjs"
 import { findPlugin, pluginPresence, pluginTurnedOff, readPluginList, syncHostSurface } from "./options.mjs"
 import { dataDir, ensureDir, magpieBaseUrl, writeAtomic } from "./paths.mjs"
-import { pidExists, processStartTime, sameProcess, signalWorker } from "./proc.mjs"
-import { claimCompare, finishClaim, holdCompare, queueDepth, recoverProcessing, takeJob } from "./queue.mjs"
+import { HEARTBEAT_MS, lockIsStale, pidAlive, shouldExitAfterPublish, workerToken } from "./proc.mjs"
+import { claimCompare, finishClaim, holdCompare, queueDepth, recoverProcessing, takeJob, touchClaim } from "./queue.mjs"
 import { persistItem } from "./sinks.mjs"
 import { translateJob } from "./translate.mjs"
 
@@ -26,10 +26,10 @@ function sourceHash() {
 }
 
 export function alive(pid) {
-  return pidExists(pid)
+  return pidAlive(pid)
 }
 
-export { signalWorker, sameProcess }
+export { shouldExitAfterPublish, workerToken }
 
 export function shouldSpawn(env = process.env) {
   return env.MAGPIE_TRANSLATOR_NO_SPAWN !== "1"
@@ -49,6 +49,8 @@ export function minimalEnv(env, dir = dataDir(env), token = "") {
   out.MAGPIE_TRANSLATOR_PARENT_PID = String(process.pid)
   if (token) out.MAGPIE_TRANSLATOR_LOCK_TOKEN = String(token)
   if (env.MAGPIE_TRANSLATOR_HOLD_AFTER_RECORD) out.MAGPIE_TRANSLATOR_HOLD_AFTER_RECORD = env.MAGPIE_TRANSLATOR_HOLD_AFTER_RECORD
+  if (env.MAGPIE_TRANSLATOR_NO_PROC === "1") out.MAGPIE_TRANSLATOR_NO_PROC = "1"
+  if (env.MAGPIE_TRANSLATOR_NO_PROC_PRELOAD) out.MAGPIE_TRANSLATOR_NO_PROC_PRELOAD = env.MAGPIE_TRANSLATOR_NO_PROC_PRELOAD
   return out
 }
 
@@ -86,58 +88,95 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-// 过期锁用 rename 拿走，再 link 自己的文件。rename 和 link 都是原子的。
+const ACQUIRE_LIMIT_MS = 5000
+
+function stopFile(dir) {
+  return path.join(dir, "worker.stop")
+}
+
+function requestStop(dir, reason) {
+  writeAtomic(stopFile(dir), `${reason}\n`)
+}
+
+function stopRequested(dir) {
+  try { return fs.existsSync(stopFile(dir)) } catch { return false }
+}
+
+function clearStop(dir) {
+  try { fs.unlinkSync(stopFile(dir)) } catch { /* 没有停止文件 */ }
+}
+
+function lockBody(id, hash, parent) {
+  return {
+    token: id,
+    heartbeat: Date.now(),
+    hash,
+    parent: Number(parent) || 0,
+    pid: process.pid,
+  }
+}
+
+function restoreGrave(grave, file) {
+  try { fs.linkSync(grave, file) } catch { return false }
+  try { fs.unlinkSync(grave) } catch { /* 已经链回去了 */ }
+  return true
+}
+
+// 过期锁用各自的墓碑名字 rename 拿走。rename 失败的人继续抢。
+// 若拿走的不是刚才那把过期锁，就 link 回去；link 失败就留下墓碑，避免删掉新主人的文件。
+async function takeStale(dir, file, seen, id) {
+  const staleToken = String(seen?.token || "")
+  if (!staleToken) return "retry"
+  const again = readLock(file)
+  if (!again || String(again.token) !== staleToken || !lockIsStale(again)) return "retry"
+  const grave = path.join(dir, `worker.lock.dead.${staleToken}.${id}`)
+  try { fs.renameSync(file, grave) } catch { return "retry" }
+  const moved = readLock(grave)
+  if (!moved || String(moved.token) !== staleToken || !lockIsStale(moved)) {
+    restoreGrave(grave, file)
+    return "retry"
+  }
+  try { fs.unlinkSync(grave) } catch { /* 过期锁可以留着 */ }
+  return "ready"
+}
+
 export async function acquireWorkerLock(dir, hash, parent, token = process.env.MAGPIE_TRANSLATOR_LOCK_TOKEN) {
   ensureDir(dir)
   const id = String(token || randomBytes(16).toString("hex"))
   process.env.MAGPIE_TRANSLATOR_LOCK_TOKEN = id
   const file = path.join(dir, "worker.lock")
-  const mine = {
-    pid: process.pid,
-    startTime: processStartTime(process.pid),
-    token: id,
-    hash,
-    parent: Number(parent) || 0,
-  }
   const privateFile = path.join(dir, `worker.lock.${id}`)
-  writeAtomic(privateFile, `${JSON.stringify(mine)}\n`)
-  for (let i = 0; i < 50; i += 1) {
+  const deadline = Date.now() + ACQUIRE_LIMIT_MS
+  const writePrivate = () => writeAtomic(privateFile, `${JSON.stringify(lockBody(id, hash, parent))}\n`)
+  while (Date.now() < deadline) {
+    writePrivate()
     try {
       fs.linkSync(privateFile, file)
-      try { fs.unlinkSync(privateFile) } catch { /* 锁已经链上 */ }
-      return true
     } catch (err) {
       if (err?.code !== "EEXIST") {
         try { fs.unlinkSync(privateFile) } catch { /* 没有临时文件 */ }
         return false
       }
-    }
-    const current = readLock(file)
-    if (current && Number(current.pid) === process.pid && String(current.token) === id && sameProcess(current)) {
-      try { fs.unlinkSync(privateFile) } catch { /* 没有临时文件 */ }
-      return true
-    }
-    if (sameProcess(current)) {
-      if (current.hash !== hash) signalWorker(current, "SIGTERM")
-      else {
+      const current = readLock(file)
+      if (current && String(current.token) === id) {
+        try { fs.unlinkSync(privateFile) } catch { /* 没有临时文件 */ }
+        clearStop(dir)
+        return true
+      }
+      if (current && !lockIsStale(current)) {
+        if (current.hash !== hash) requestStop(dir, "hash")
         try { fs.unlinkSync(privateFile) } catch { /* 没有临时文件 */ }
         return false
       }
-      await sleep(50)
+      await takeStale(dir, file, current || {}, id)
       continue
     }
-    const staleToken = String(current?.token || "missing")
-    const again = readLock(file)
-    if (String(again?.token || "missing") !== staleToken || sameProcess(again)) continue
-    const grave = path.join(dir, `worker.lock.dead.${staleToken}`)
-    try { fs.renameSync(file, grave) } catch { continue }
-    const moved = readLock(grave)
-    if (String(moved?.token || "missing") !== staleToken || sameProcess(moved)) {
-      try { fs.linkSync(grave, file) } catch { /* 名字已经被占 */ }
-      try { fs.unlinkSync(grave) } catch { /* 已经还回去了 */ }
-      continue
+    const owned = readLock(file)
+    if (owned && String(owned.token) === id) {
+      try { fs.unlinkSync(privateFile) } catch { /* 锁已经链上 */ }
+      clearStop(dir)
+      return true
     }
-    try { fs.unlinkSync(grave) } catch { /* 过期锁可以留着 */ }
   }
   try { fs.unlinkSync(privateFile) } catch { /* 没有临时文件 */ }
   return false
@@ -146,38 +185,73 @@ export async function acquireWorkerLock(dir, hash, parent, token = process.env.M
 function releaseWorkerLock(dir, token) {
   const file = path.join(dir, "worker.lock")
   const current = readLock(file)
-  if (!current) return
-  if (String(current.token) !== String(token)) return
-  if (Number(current.pid) !== process.pid) return
-  if (String(current.startTime) !== processStartTime(process.pid)) return
+  if (!current || String(current.token) !== String(token)) return
   const grave = path.join(dir, `worker.lock.dead.${token}`)
   try { fs.renameSync(file, grave) } catch { return }
   const moved = readLock(grave)
-  if (String(moved?.token) !== String(token)) {
-    try { fs.linkSync(grave, file) } catch { /* 新主人已经放上锁 */ }
+  if (!moved || String(moved.token) !== String(token)) {
+    restoreGrave(grave, file)
+    return
   }
   try { fs.unlinkSync(grave) } catch { /* 已经不在 */ }
 }
 
-// 活着的工人，pid、启动时刻和 token 都对得上，就不发信号。父进程没了也让它把队列做完。
+function refreshLock(dir, token) {
+  const file = path.join(dir, "worker.lock")
+  let fd
+  try { fd = fs.openSync(file, "r+") } catch { return true }
+  try {
+    const current = JSON.parse(fs.readFileSync(fd, "utf8"))
+    if (!current || String(current.token) !== String(token)) return false
+    const next = `${JSON.stringify({ ...current, heartbeat: Date.now(), pid: process.pid })}\n`
+    const buf = Buffer.from(next)
+    fs.writeSync(fd, buf, 0, buf.length, 0)
+    fs.ftruncateSync(fd, buf.length)
+    const now = new Date()
+    try { fs.futimesSync(fd, now, now) } catch { /* 心跳数字已经写上 */ }
+  } catch {
+    return true
+  } finally {
+    try { fs.closeSync(fd) } catch { /* 已经关上 */ }
+  }
+  const check = readLock(file)
+  if (!check) return true
+  return String(check.token) === String(token)
+}
+
+export function workerLaunch(env, dir, token) {
+  const args = []
+  if (env.MAGPIE_TRANSLATOR_NO_PROC === "1" && env.MAGPIE_TRANSLATOR_NO_PROC_PRELOAD) {
+    args.push("--preload", String(env.MAGPIE_TRANSLATOR_NO_PROC_PRELOAD))
+  }
+  args.push(WORKER_SCRIPT)
+  return {
+    command: process.execPath,
+    args,
+    options: {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      cwd: dir,
+      env: minimalEnv(env, dir, token),
+    },
+  }
+}
+
+// 锁靠心跳。心跳还新就不另起进程，也不发信号。代码变了就写停止文件，让旧工人自己退出。
 export function ensureWorker(env = process.env) {
   if (!shouldSpawn(env)) return false
   const dir = dataDir(env)
   ensureDir(dir)
   const hash = sourceHash()
-  const file = path.join(dir, "worker.lock")
-  const current = readLock(file)
-  if (sameProcess(current)) {
-    if (current.hash === hash) return false
-    signalWorker(current, "SIGTERM")
+  const current = readLock(lockPath(env))
+  if (current && !lockIsStale(current)) {
+    if (current.hash !== hash) requestStop(dir, "hash")
+    return false
   }
   const token = randomBytes(16).toString("hex")
-  const child = spawn(process.execPath, [WORKER_SCRIPT], {
-    detached: true,
-    stdio: "ignore",
-    cwd: dir,
-    env: minimalEnv(env, dir, token),
-  })
+  const launch = workerLaunch(env, dir, token)
+  const child = spawn(launch.command, launch.args, launch.options)
   child.unref()
   return true
 }
@@ -187,8 +261,18 @@ function scrub(job) {
   delete clean.__claim
   delete clean.ownerPid
   delete clean.ownerStart
+  delete clean.ownerToken
+  delete clean.heartbeat
   delete clean.gatewayKey
   return clean
+}
+
+function keepClaimFresh(claim, env) {
+  const timer = setInterval(() => {
+    try { touchClaim(claim, env) } catch { /* 下一拍再写 */ }
+  }, HEARTBEAT_MS)
+  if (typeof timer.unref === "function") timer.unref()
+  return () => clearInterval(timer)
 }
 
 function watchStop(env, ac) {
@@ -221,6 +305,7 @@ export async function runQueued(job, env = process.env, opts = {}) {
   }
   const ac = new AbortController()
   const stopWatch = watchStop(env, ac)
+  const releaseBeat = keepClaimFresh(claim, env)
   const started = Date.now()
   let translation = ""
   let error = ""
@@ -237,6 +322,7 @@ export async function runQueued(job, env = process.env, opts = {}) {
     error = String(err?.message || err).slice(0, 500)
   } finally {
     stopWatch()
+    releaseBeat()
   }
   const entry = {
     ...clean,
@@ -292,6 +378,7 @@ export async function processCompare(env = process.env, opts = {}) {
   let finished = false
   const ac = new AbortController()
   const stopWatch = watchStop(env, ac)
+  const releaseBeat = keepClaimFresh(claim, env)
   try {
     const row = findHistory(entryId, env)
     if (!row) {
@@ -343,6 +430,7 @@ export async function processCompare(env = process.env, opts = {}) {
     return true
   } finally {
     stopWatch()
+    releaseBeat()
     releaseHold()
     if (finished) finishClaim(claim)
   }
@@ -368,16 +456,13 @@ export async function drain(env = process.env, opts = {}) {
   return n
 }
 
-function publishWait(reason) {
-  return reason === "debounce" || reason === "rate" || reason === "conflict" || reason === "error" || reason === "read"
-}
-
 async function loop() {
   const dir = dataDir()
   const hash = sourceHash()
   if (!await acquireWorkerLock(dir, hash, process.env.MAGPIE_TRANSLATOR_PARENT_PID)) return
-  const token = process.env.MAGPIE_TRANSLATOR_LOCK_TOKEN
+  const token = workerToken()
   let released = false
+  let lost = false
   const shutdown = () => {
     if (released) return
     released = true
@@ -386,10 +471,17 @@ async function loop() {
   }
   process.on("SIGTERM", shutdown)
   process.on("SIGHUP", shutdown)
+  const beat = setInterval(() => {
+    if (!refreshLock(dir, token)) lost = true
+  }, HEARTBEAT_MS)
+  if (typeof beat.unref === "function") beat.unref()
   let idle = 0
+  let conflictSince = 0
   try {
     for (;;) {
+      if (lost) break
       if (pluginShouldExit()) break
+      if (!parentGone() && stopRequested(dir)) break
       let did = false
       try {
         did = await processOnce()
@@ -400,7 +492,10 @@ async function loop() {
       if (queueDepth() === 0) {
         let published = { wrote: false, reason: "empty" }
         try { published = syncHostSurface() } catch { published = { wrote: false, reason: "error" } }
-        if (parentGone() && !publishWait(published.reason)) break
+        if (published.reason === "conflict") {
+          if (!conflictSince) conflictSince = Date.now()
+        } else conflictSince = 0
+        if (shouldExitAfterPublish({ parentDead: parentGone(), reason: published.reason, conflictSince })) break
       } else if (parentGone()) {
         await sleep(50)
         continue
@@ -408,11 +503,13 @@ async function loop() {
       if (did) idle = 0
       else idle += 1
       if (pluginShouldExit()) break
+      if (!parentGone() && stopRequested(dir)) break
       if (!did && pluginTurnedOff()) break
       if (!parentGone() && idle > 40) break
       await sleep(parentGone() ? 50 : 500)
     }
   } finally {
+    clearInterval(beat)
     if (!released) {
       released = true
       releaseWorkerLock(dir, token)

@@ -6,9 +6,9 @@ import os from "node:os"
 import path from "node:path"
 import { test } from "bun:test"
 import { packageRoot } from "../src/options.mjs"
-import { enqueue, processingDir } from "../src/queue.mjs"
+import { enqueue, processingDir, recoverProcessing } from "../src/queue.mjs"
 import { recordTranslation } from "../src/history.mjs"
-import { alive, ensureWorker, processOnce, signalWorker } from "../src/worker.mjs"
+import { alive, ensureWorker, processOnce } from "../src/worker.mjs"
 
 function tempHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "translator-spawn-"))
@@ -338,8 +338,8 @@ test("父进程在任务中途退出后，工人做完队列再写摘要", async
     id: "b-stranded",
     original: "Second sentence left behind.",
     masked: "Second sentence left behind.",
-    ownerPid: 999999,
-    ownerStart: "1",
+    ownerToken: "dead",
+    heartbeat: 1,
   })}\n`)
   const helper = path.join(home, "parent.mjs")
   fs.writeFileSync(helper, `
@@ -399,7 +399,7 @@ await new Promise(() => {})
   }
 }, 20000)
 
-test("两个人同时抢过期锁，只有一个拿到，不碰无关进程", async () => {
+test("三个人同时抢过期锁，只有一个拿到，不碰无关进程", async () => {
   const home = tempHome()
   const sleeper = spawn("sleep", ["30"], { stdio: "ignore" })
   fs.writeFileSync(path.join(home, "worker.lock"), `${JSON.stringify({
@@ -414,10 +414,16 @@ test("两个人同时抢过期锁，只有一个拿到，不碰无关进程", as
 import fs from "node:fs"
 import { acquireWorkerLock } from ${JSON.stringify(path.join(packageRoot(), "src/worker.mjs"))}
 const ok = await acquireWorkerLock(${JSON.stringify(home)}, "hash-race", ${process.pid})
-fs.writeFileSync(process.env.RACE_OUT, ok ? "yes" : "no")
+let held = false
+if (ok) {
+  try {
+    held = JSON.parse(fs.readFileSync(${JSON.stringify(path.join(home, "worker.lock"))}, "utf8")).token === process.env.MAGPIE_TRANSLATOR_LOCK_TOKEN
+  } catch {}
+}
+fs.writeFileSync(process.env.RACE_OUT, held ? "yes" : "no")
 await new Promise(() => {})
 `)
-  const tokens = ["race-token-a", "race-token-b"]
+  const tokens = ["race-token-a", "race-token-b", "race-token-c"]
   const children = tokens.map((token, index) => spawn(process.execPath, [helper], {
     env: {
       PATH: process.env.PATH || "",
@@ -431,16 +437,15 @@ await new Promise(() => {})
   }))
   try {
     const results = await waitFor(() => {
-      const values = [0, 1].map((index) => {
+      const values = tokens.map((_token, index) => {
         try { return fs.readFileSync(path.join(home, `out-${index}`), "utf8").trim() } catch { return "" }
       })
       return values.every(Boolean) ? values : null
     }, 8000)
-    assert.deepEqual([...results].sort(), ["no", "yes"])
+    assert.deepEqual([...results].sort(), ["no", "no", "yes"])
     const lock = JSON.parse(fs.readFileSync(path.join(home, "worker.lock"), "utf8"))
     assert.equal(tokens.includes(lock.token), true)
-    const winner = lock.token === "race-token-a" ? results[0] : results[1]
-    assert.equal(winner, "yes")
+    assert.equal(results[tokens.indexOf(lock.token)], "yes")
     assert.notEqual(lock.pid, sleeper.pid)
     assert.equal(alive(sleeper.pid), true)
     assert.equal(alive(lock.pid), true)
@@ -460,8 +465,7 @@ test("锁上的 pid 已被别人占用时不发信号", async () => {
   const sleeper = spawn("sleep", ["30"], { stdio: "ignore" })
   try {
     assert.ok(await waitFor(() => alive(sleeper.pid) ? true : null))
-    const record = { pid: sleeper.pid, startTime: "not-real", token: "nope", hash: "old", parent: 1 }
-    assert.equal(signalWorker(record), false)
+    const record = { pid: sleeper.pid, heartbeat: 1, token: "nope", hash: "old", parent: 1 }
     assert.equal(alive(sleeper.pid), true)
     fs.writeFileSync(path.join(home, "worker.lock"), `${JSON.stringify(record)}\n`)
     assert.equal(spawnWorker(), true)
@@ -533,6 +537,11 @@ test("历史写完到收尾之间收到 SIGTERM，重放不再发 webhook", asyn
     assert.equal(gone, true)
     assert.equal(fs.existsSync(claim), true)
     assert.equal(hooks, 1)
+    assert.equal(recoverProcessing(process.env), 0)
+    assert.equal(fs.existsSync(claim), true)
+    const held = JSON.parse(fs.readFileSync(claim, "utf8"))
+    held.heartbeat = 1
+    fs.writeFileSync(claim, `${JSON.stringify(held)}\n`)
     let fetched = false
     await processOnce(process.env, {
       fetchImpl() {

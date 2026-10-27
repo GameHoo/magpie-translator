@@ -5,7 +5,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { writeGatewayKey } from "./auth.mjs"
 import { DEFAULT_DISPLAY, DEFAULT_LANGUAGE, parseDisplay, parseFlag, parseHistoryLimit, parseTimeout } from "./config.mjs"
-import { publicFeed, readHistory } from "./history.mjs"
+import { publicFeed, readDropped, readHistory } from "./history.mjs"
 import { dataDir, writeAtomic } from "./paths.mjs"
 
 export const MAX_NOTE = 4000
@@ -472,9 +472,9 @@ export function syncHostSurface(env = process.env, opts = {}) {
   if (rawKey) writeGatewayKey(rawKey, env)
   const dropKey = rawKey || ""
 
-  const feed = publicFeed(readHistory(env))
+  const feed = publicFeed(readHistory(env), readDropped(env))
   const dir = dataDir(env)
-  const empty = !feed.entries.length
+  const empty = !feed.entries.length && !feed.dropped?.length
   const same = sameJson(options.feed ?? null, feed)
   const skipFeed = entry.off === true || same || (empty && options.feed == null)
   if (skipFeed) {

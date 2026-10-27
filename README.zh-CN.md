@@ -428,7 +428,7 @@ Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning th
 - **`onResponse` 只入队。** 模型调用在 `src/worker.mjs`，经本机 magpie 网关，等待时间是 `translateTimeoutMs`（默认 120 秒，最长 600 秒）。hook 的返回值会被丢掉，客户端字节已经写完。`onRequest` 不改请求。两者都在 `src/hooks.mjs`。`magpie plugin list` 仍固定印 `async gateway hook onRequest`，那是 magpie 写死的句子。
 - **没有 middleware。** 经过网关的字节保持原样。Codex 的 `response.completed` 如果本身没有正文，插件仍然看不到这一轮。
 - **页面在沙箱里**：iframe，`connect-src 'none'`，没有内联脚本，也不能 `fetch`。它只能 `magpie.read` `providers:list` 和 `usage:summary`。对比和重试写的是一小份 `_compare`，不会把 feed 发回去，并且按 UTF-8 字节计算大小。
-- **magpie 把 hook 停在最多 10 秒**（`host.js` 里的 `gatewayTimeout`，本包不把这个值设成 10 秒）。真实转述要 12～105 秒。页面不能发网络请求，也不能读插件文件。工具调用的时限是 55 秒，而且结果会回到正在对话的 agent。没有给插件用的定时或后台任务接口。所以工人脱离 hook 的中止信号。加载 hook 时会把它拉起来，新任务也会。同一时间只有一个工人，锁在 `worker.lock`。锁里记下 pid、进程启动时刻和随机 token，三者对上才发信号。父进程退出后，工人先做完手头的任务，再把队列排空，队列空了才写摘要，然后自己退出。插件关掉，或者 `plugins.json` 里已经没有这个插件，工人就退出。收件箱最多 100 条。同一个任务 id 只记一次历史，webhook 也只发一次。它拿到的环境只有路径、家目录、配置目录、父进程号和这把锁的 token，没有网关密钥。
+- **magpie 把 hook 停在最多 10 秒**（`host.js` 里的 `gatewayTimeout`，本包不把这个值设成 10 秒）。真实转述要 12～105 秒。页面不能发网络请求，也不能读插件文件。工具调用的时限是 55 秒，而且结果会回到正在对话的 agent。没有给插件用的定时或后台任务接口。所以工人脱离 hook 的中止信号。加载 hook 时会把它拉起来，新任务也会。同一时间只有一个工人。锁是 `worker.lock` 里的随机 token 和心跳：每 2 秒刷新一次，超过 8 秒没有心跳才算空锁。这个包不会向工人发信号。代码更新时写 `worker.stop`，当前工人做完手头的任务后自己退出。父进程退出后，工人先做完手头的任务，再把队列排空，队列空了才写摘要，然后自己退出。摘要如果一直和别人的写入冲突，最多再试 10 秒。插件关掉，或者 `plugins.json` 里已经没有这个插件，工人就退出。设置保存如果发现文件已经被改过，页面会说明这次没有写入。收件箱最多 100 条，多出来的会记进日志，并在翻译记录页上列出来。同一个任务 id 只记一次历史，webhook 也只发一次。它拿到的环境只有路径、家目录、配置目录、父进程号和这把锁的 token，没有网关密钥。
 - **翻译记录页读的是 options 里的摘要。** 这是 magpie 已经给页面的读取方式。摘要变了才写进 `plugins.json`，先稳定 3 秒，15 秒最多一次。真写了，下一次网关请求会重启 hook 宿主。内容相同就不碰文件。因为每次更新都会重启宿主，这个包没有提交到官方列表。
 - **对比和重试**读 options 里的 `_compare`，工人自己做，不必再等一条回复。同一个 nonce 用独占文件认领，结果写入历史之后才记为做过。做的过程中崩溃，下次还会再做。模型返回的错误记下来之后，不再做第二次。
 - **出错不影响原流程**：插件出了任何问题，agent 照样拿到原文。
@@ -438,7 +438,7 @@ Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning th
 ## 隐私
 
 - 原文只会发给你在规则里选的翻译模型，经本机 magpie 网关转发。插件本身不连接任何外部服务。
-- 完整记录保存在本机数据目录：`$MAGPIE_TRANSLATOR_HOME`，否则 `$XDG_DATA_HOME/magpie-translator`，再否则 `~/.local/share/magpie-translator/`。里面有 `history.json`（含送出的正文和提示词，供对比使用，模式 0600）、`log.jsonl`、`latest.txt`、`compare-seen.json`、`inbox/`（最多 100 条）、`processing/`、`delivered/`、`feed.json`、`feed-state.json`、`worker.lock`（pid、启动时刻、随机 token）。网关密钥如果需要，单独放在 `gateway.key`（权限 0600）。远程 `magpieBaseUrl` 需要这个文件。密钥不进 `plugins.json`，也不进历史记录。「翻译记录保留」设为「不保存」时，不写历史记录。
+- 完整记录保存在本机数据目录：`$MAGPIE_TRANSLATOR_HOME`，否则 `$XDG_DATA_HOME/magpie-translator`，再否则 `~/.local/share/magpie-translator/`。里面有 `history.json`（含送出的正文和提示词，供对比使用，模式 0600）、`log.jsonl`、`latest.txt`、`compare-seen.json`、`inbox/`（最多 100 条）、`processing/`（认领上有 token 和心跳）、`delivered/`、`dropped.json`、`feed.json`、`feed-state.json`、`worker.lock`（token 和心跳）、`worker.stop`。网关密钥如果需要，单独放在 `gateway.key`（权限 0600）。远程 `magpieBaseUrl` 需要这个文件。密钥不进 `plugins.json`，也不进历史记录。「翻译记录保留」设为「不保存」时，不写历史记录。
 - hook 不写 `plugins.json`。工人只在队列空了、摘要也变了的时候，重新读一遍 `plugins.json`，把 `options.feed` 合到最新内容上。`gatewayKey` 只有仍然等于刚搬进 `gateway.key` 的那一串时才删掉。写入前文件又变了，这一轮就跳过。设置保存如果发现文件已经变了，也不覆盖，同时会去掉残留的 `feed` 和 `models`。页面提交前会丢掉 `feed`，避免把摘要再发回去。
 - 插件不监听本机端口。
 - `webhook` 和桌面通知默认不启用。启用后也只对来源是本机的请求发出，内容里不含 gateway key。

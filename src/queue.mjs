@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
+import { recordDropped } from "./history.mjs"
 import { dataDir, ensureDir, writeAtomic } from "./paths.mjs"
-import { processStartTime } from "./proc.mjs"
+import { beatIsStale, workerToken } from "./proc.mjs"
 
 export const INBOX_CAP = 100
 
@@ -25,9 +26,19 @@ function capInbox(env, keepName) {
     return { name, mtime }
   }).sort((a, b) => a.mtime - b.mtime || a.name.localeCompare(b.name))
   const extra = names.length - (INBOX_CAP - 1)
+  const dropped = []
   for (let i = 0; i < extra; i += 1) {
-    try { fs.unlinkSync(path.join(dir, ranked[i].name)) } catch { /* 已经被拿走 */ }
+    const file = path.join(dir, ranked[i].name)
+    let job = null
+    try { job = JSON.parse(fs.readFileSync(file, "utf8")) } catch { /* 坏文件也丢掉 */ }
+    try { fs.unlinkSync(file) } catch { continue }
+    dropped.push({
+      id: String(job?.id || ranked[i].name.replace(/\.json$/, "")),
+      at: new Date().toISOString(),
+      original: String(job?.original || "").slice(0, 160),
+    })
   }
+  if (dropped.length) recordDropped(env, dropped)
 }
 
 export function enqueue(job, env = process.env) {
@@ -50,12 +61,8 @@ export function listInbox(env = process.env) {
   }
 }
 
-function ownerStillRunning(record) {
-  const pid = Number(record?.pid ?? record?.ownerPid)
-  if (!pid || pid === process.pid) return false
-  const start = processStartTime(pid)
-  if (!start || !record?.startTime) return false
-  return start === String(record.startTime)
+function claimIsFresh(record, now = Date.now()) {
+  return !beatIsStale(record?.heartbeat, now)
 }
 
 export function queueDepth(env = process.env) {
@@ -75,7 +82,7 @@ function readJson(file) {
   }
 }
 
-// 崩溃留下的 processing 文件，主人进程已经不在时移回收件箱。还活着的主人继续做。
+// 认领上带了 token 和 heartbeat。心跳还新的时候不挪走，两个工人短暂重叠也不会抢同一条。
 export function recoverProcessing(env = process.env) {
   const processing = processingDir(env)
   const inbox = inboxDir(env)
@@ -88,13 +95,12 @@ export function recoverProcessing(env = process.env) {
     const from = path.join(processing, name)
     if (name.startsWith("compare-")) {
       const current = readJson(from)
-      if (!ownerStillRunning(current)) {
-        try { fs.unlinkSync(from) } catch { /* 另一个工人刚收走 */ }
-      }
+      if (claimIsFresh(current)) continue
+      try { fs.unlinkSync(from) } catch { /* 另一个工人刚收走 */ }
       continue
     }
     const job = readJson(from)
-    if (ownerStillRunning({ pid: job?.ownerPid, startTime: job?.ownerStart })) continue
+    if (claimIsFresh(job)) continue
     const to = path.join(inbox, name)
     try {
       fs.renameSync(from, to)
@@ -119,13 +125,25 @@ export function takeJob(env = process.env) {
       try { fs.unlinkSync(to) } catch { /* 坏文件丢掉 */ }
       continue
     }
-    job.ownerPid = process.pid
-    job.ownerStart = processStartTime(process.pid)
+    job.ownerToken = workerToken(env)
+    job.heartbeat = Date.now()
     try { writeAtomic(to, `${JSON.stringify(job)}\n`) } catch { /* 认领已经成立 */ }
     job.__claim = to
     return job
   }
   return null
+}
+
+export function touchClaim(claim, env = process.env) {
+  if (!claim) return false
+  const job = readJson(claim)
+  if (!job) return false
+  const token = workerToken(env)
+  if (job.ownerToken && String(job.ownerToken) !== token) return false
+  job.ownerToken = token
+  job.heartbeat = Date.now()
+  try { writeAtomic(claim, `${JSON.stringify(job)}\n`) } catch { return false }
+  return true
 }
 
 export function finishClaim(claim) {
@@ -163,11 +181,11 @@ export function claimCompare(env, body) {
   const dir = processingDir(env)
   ensureDir(dir)
   const file = path.join(dir, compareClaimName(body.nonce))
-  const payload = { ...body, pid: process.pid, startTime: processStartTime(process.pid), at: Date.now() }
+  const payload = { ...body, ownerToken: workerToken(env), heartbeat: Date.now(), at: Date.now() }
   if (createNew(file, payload)) return file
   const current = readJson(file)
-  if (ownerStillRunning(current)) return ""
-  if (Number(current?.pid) === process.pid && inflightCompare.has(String(body.nonce))) return ""
+  if (claimIsFresh(current)) return ""
+  if (inflightCompare.has(String(body.nonce)) && String(current?.ownerToken || "") === workerToken(env)) return ""
   try { fs.unlinkSync(file) } catch { /* 对方刚删 */ }
   if (createNew(file, payload)) return file
   return ""

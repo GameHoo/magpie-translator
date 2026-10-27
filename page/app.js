@@ -50,6 +50,7 @@
       "pick.pattern": "所有 {p}", "pick.none": "没有匹配的模型", "pick.nav": "选择", "pick.enter": "确认", "pick.esc": "关闭",
       "pick.empty": "还没有模型。等目录刷新，或先在 magpie 里配好 provider。",
       "save.saved": "已保存", "save.savedJust": "已保存 · 刚刚", "save.dirty": "有未保存的更改", "toast.saved": "设置已保存",
+      "save.conflict": "plugins.json 在保存前被改过，这次没有写入。重新打开这一页后再保存一次。", "save.failed": "保存失败",
       "prompt.default": "默认提示词", "prompt.edited": "已修改", "prompt.chars": "{n} 字", "toast.reset": "已恢复默认提示词",
       "hero.running": "运行中 · 今日已翻译 {n} 条", "hero.paused": "已暂停 · 今日已翻译 {n} 条", "hero.offline": "预览 · 不在 magpie 窗口里",
       "h.src": "原文", "h.dst": "译文", "h.compare": "用其他模型对比…", "h.copyDst": "复制译文", "h.copySrc": "复制原文",
@@ -57,6 +58,7 @@
       "h.emptySub": "换个关键词，或清除筛选条件。", "h.clear": "清除筛选", "h.pick": "选择一条记录",
       "h.pickSub": "左侧选一条，原文和译文会并排显示。", "h.none": "还没有翻译记录", "h.noneSub": "命中规则的最终回复会出现在这里。",
       "h.auth": "网关拒绝了翻译请求。本机回环一般不需要密钥。如果需要，到设置里填写网关密钥，它会存进数据目录的 gateway.key，不会留在 plugins.json。",
+      "h.dropped": "收件箱最多 100 条。多出来的 {n} 条还没翻译就被丢掉了：{ids}",
       "h.today": "今天", "h.yesterday": "昨天", "toast.copied": "已复制到剪贴板", "h.noOut": "没有译文", "h.retry": "重试",
       "h.retryWith": "换个模型重试…", "h.adjust": "调整超时", "h.better": "这个更好", "h.collapse": "收起列表",
       "h.alignNote": "按段落对齐 · 同步滚动", "h.queued": "已交给本机工人，做完后会出现在这里", "h.retried": "已交给本机工人，做完后会出现在这里",
@@ -75,6 +77,7 @@
       "pick.pattern": "All {p}", "pick.none": "No matching models", "pick.nav": "Move", "pick.enter": "Select", "pick.esc": "Close",
       "pick.empty": "No models yet. Wait for the catalog, or add a provider in magpie.",
       "save.saved": "Saved", "save.savedJust": "Saved · just now", "save.dirty": "Unsaved changes", "toast.saved": "Settings saved",
+      "save.conflict": "plugins.json changed before this save, so nothing was written. Reload this page and save again.", "save.failed": "Save failed",
       "prompt.default": "Default prompt", "prompt.edited": "Edited", "prompt.chars": "{n} chars", "toast.reset": "Prompt reset",
       "hero.running": "Running · {n} translated today", "hero.paused": "Paused · {n} translated today", "hero.offline": "Preview · not inside magpie",
       "h.src": "Original", "h.dst": "Translation", "h.compare": "Compare with…", "h.copyDst": "Copy translation", "h.copySrc": "Copy original",
@@ -82,6 +85,7 @@
       "h.emptySub": "Try another keyword or clear filters.", "h.clear": "Clear filters", "h.pick": "Pick an entry",
       "h.pickSub": "Original and translation show side by side.", "h.none": "No translations yet", "h.noneSub": "Final replies that match a rule show up here.",
       "h.auth": "The gateway refused the rewrite. Loopback usually needs no key. If it does, set one in Settings. It is stored as gateway.key in the data directory and removed from plugins.json.",
+      "h.dropped": "The inbox holds 100 jobs. {n} waiting jobs were dropped: {ids}",
       "h.today": "Today", "h.yesterday": "Yesterday", "toast.copied": "Copied", "h.noOut": "No translation", "h.retry": "Retry",
       "h.retryWith": "Retry with…", "h.adjust": "Adjust timeout", "h.better": "Better", "h.collapse": "Hide list",
       "h.alignNote": "Paragraph-aligned · synced scroll", "h.queued": "Handed to the local worker. It shows up here when the rewrite finishes", "h.retried": "Handed to the local worker. It shows up here when the rewrite finishes",
@@ -184,6 +188,13 @@
     const text = message ? String(message) : "";
     el.hidden = !text;
     el.textContent = text;
+  }
+
+  function saveFailure(result) {
+    const status = Number(result?.status || result?.statusCode || 0);
+    const raw = String(result?.message || result || "");
+    if (status === 409 || raw.includes("409") || raw.includes("被改过")) return T("save.conflict");
+    return raw || T("save.failed");
   }
 
   let setChain = Promise.resolve();
@@ -681,7 +692,7 @@
         toast(T("toast.saved"));
       } else {
         setDirty();
-        const message = String(result?.message || result || "保存失败");
+        const message = saveFailure(result);
         showJobError(message);
         toast(message);
       }
@@ -1112,7 +1123,7 @@
       if (built.error) { showJobError(built.error); toast(built.error); return; }
       const result = await setOptions(built.options);
       if (result === true) { showJobError(""); toast(replace ? T("h.retried") : T("h.queued")); }
-      else { const message = String(result?.message || result || "提交失败"); showJobError(message); toast(message); }
+      else { const message = saveFailure(result); showJobError(message); toast(message); }
     }
     function select(id) {
       state.sel = id; state.compare = []; state.show = 1; state.pending = {}; state.openOriginal = false;
@@ -1181,10 +1192,20 @@
       el.hidden = !bad;
       el.textContent = bad ? T("h.auth") : "";
     }
+    function paintDropped(feed) {
+      const el = $("#droppedNotice");
+      if (!el) return;
+      const items = Array.isArray(feed?.dropped) ? feed.dropped : [];
+      el.hidden = items.length === 0;
+      if (!items.length) { el.textContent = ""; return; }
+      const ids = items.map((item) => item && item.id).filter(Boolean).slice(0, 8).join(", ");
+      el.textContent = T("h.dropped").replace("{n}", String(items.length)).replace("{ids}", ids);
+    }
     async function refresh() {
       const opts = await readOptions();
       const rows = Array.isArray(opts?.feed?.entries) ? opts.feed.entries.slice() : [];
       paintAuth(rows);
+      paintDropped(opts?.feed);
       if (params.get("demo") === "1" && !rows.length) rows.push(...demoRows());
       const key = JSON.stringify(rows);
       if (key === refresh.last) { noteWait(); return; }

@@ -497,5 +497,5 @@ a.btn { text-decoration: none; color: inherit; }
   .err-card { margin-left: var(--s4); margin-right: var(--s4); }
 }
 .code .code-h .changed { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font); color: var(--warn); font-weight: 500; }
-#authError { margin: 0 var(--s5) var(--s3); padding: 8px 12px; border-radius: var(--r-ctl); background: var(--err-soft); color: var(--fg); font-size: var(--t-sm); }
-#authError[hidden] { display: none; }
+#authError, #droppedNotice { margin: 0 var(--s5) var(--s3); padding: 8px 12px; border-radius: var(--r-ctl); background: var(--err-soft); color: var(--fg); font-size: var(--t-sm); }
+#authError[hidden], #droppedNotice[hidden] { display: none; }

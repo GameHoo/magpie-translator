@@ -9,7 +9,8 @@ import { FEED_BUDGET, hasSeen, markSeen, publicFeed, recordTranslation, writePub
 import { packageRoot, syncHostSurface } from "../src/options.mjs"
 import { enqueue, INBOX_CAP, listInbox, processingDir, recoverProcessing } from "../src/queue.mjs"
 import { minimalEnv } from "../src/worker.mjs"
-import { alive, parentGone, processCompare, processOnce } from "../src/worker.mjs"
+import { alive, parentGone, processCompare, processOnce, shouldExitAfterPublish, workerLaunch } from "../src/worker.mjs"
+import { CONFLICT_LIMIT_MS } from "../src/proc.mjs"
 
 function tempHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-durable-"))
@@ -264,7 +265,22 @@ test("收件箱最多留下 100 条，最新的还在", () => {
   assert.equal(names.length, INBOX_CAP)
   assert.equal(names.includes("n-104.json"), true)
   assert.equal(names.includes("n-000.json"), false)
+  const dropped = JSON.parse(fs.readFileSync(path.join(home, "dropped.json"), "utf8"))
+  assert.equal(dropped.some((item) => item.id === "n-000"), true)
+  const log = fs.readFileSync(path.join(home, "log.jsonl"), "utf8")
+  assert.match(log, /"dropped":true/)
+  assert.match(log, /n-000/)
   fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("父进程退出后，plugins.json 冲突最多再试一段时间", () => {
+  assert.equal(shouldExitAfterPublish({ parentDead: true, reason: "conflict", conflictSince: 1000, now: 1000 + CONFLICT_LIMIT_MS - 1 }), false)
+  assert.equal(shouldExitAfterPublish({ parentDead: true, reason: "conflict", conflictSince: 1000, now: 1000 + CONFLICT_LIMIT_MS }), true)
+  assert.equal(shouldExitAfterPublish({ parentDead: true, reason: "debounce", conflictSince: 1000, now: 1000 + CONFLICT_LIMIT_MS + 5000 }), false)
+  assert.equal(shouldExitAfterPublish({ parentDead: true, reason: "empty", conflictSince: 0, now: 5 }), true)
+  assert.equal(shouldExitAfterPublish({ parentDead: false, reason: "conflict", conflictSince: 1000, now: 999999 }), false)
+  const launch = workerLaunch({ PATH: "/usr/bin", HOME: "/Users/magpie" }, "/Users/magpie/Library/Application Support/magpie-translator", "token")
+  assert.equal(launch.options.windowsHide, true)
 })
 
 test("plugins.json 在写入前被改过时只合上 feed，新的密钥留着", () => {

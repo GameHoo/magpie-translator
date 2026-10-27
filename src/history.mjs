@@ -105,13 +105,49 @@ export function publicEntry(entry) {
 
 // 页面通过 magpie.options.get() 读到的那一份。最新的在前，超长的丢掉尾巴，
 // 整份超过预算就少放几条。磁盘上的 history.json 仍是全文。
-export function publicFeed(rows = []) {
-  return { entries: fitEntries(rows.map(publicEntry)) }
+export function droppedPath(env = process.env) {
+  return path.join(dataDir(env), "dropped.json")
+}
+
+export function readDropped(env = process.env) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(droppedPath(env), "utf8"))
+    return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object") : []
+  } catch {
+    return []
+  }
+}
+
+export function recordDropped(env, items) {
+  const list = (Array.isArray(items) ? items : []).filter((item) => item && item.id)
+  if (!list.length) return []
+  const next = [...list, ...readDropped(env)].slice(0, 20)
+  writeAtomic(droppedPath(env), `${JSON.stringify(next)}\n`)
+  try {
+    ensureDir(dataDir(env))
+    for (const item of list) {
+      fs.appendFileSync(logPath(env), `${JSON.stringify({ at: item.at, dropped: true, id: item.id })}\n`, { mode: 0o600 })
+    }
+  } catch { /* 页面上的摘要仍会列出丢掉的任务 */ }
+  const ids = list.map((item) => item.id).join(", ")
+  console.error(`magpie-translator: dropped ${list.length} queued job(s) because the inbox is over 100: ${ids}`)
+  return next
+}
+
+export function publicFeed(rows = [], dropped = []) {
+  const feed = { entries: fitEntries(rows.map(publicEntry)) }
+  const list = (Array.isArray(dropped) ? dropped : []).slice(0, 20).map((item) => ({
+    id: String(item.id || ""),
+    at: item.at || "",
+    original: String(item.original || "").slice(0, 160),
+  })).filter((item) => item.id)
+  if (list.length) feed.dropped = list
+  return feed
 }
 
 export function writePublicFeed(env = process.env) {
   const file = path.join(dataDir(env), "feed.json")
-  const next = JSON.stringify(publicFeed(readHistory(env)))
+  const next = JSON.stringify(publicFeed(readHistory(env), readDropped(env)))
   try {
     if (fs.readFileSync(file, "utf8") === next) return false
   } catch { /* 还没有这份文件 */ }
@@ -192,7 +228,7 @@ function readLogRows(env) {
   for (const line of lines) {
     let parsed
     try { parsed = JSON.parse(line) } catch { continue }
-    if (!parsed || typeof parsed !== "object") continue
+    if (!parsed || typeof parsed !== "object" || parsed.dropped === true) continue
     const at = typeof parsed.at === "string" ? parsed.at : ""
     const original = typeof parsed.original === "string" ? parsed.original : ""
     const translation = typeof parsed.translation === "string" ? parsed.translation : ""
