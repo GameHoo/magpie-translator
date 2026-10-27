@@ -1,0 +1,11 @@
+/* ==========================================================================
+   magpie-translator — shared styles
+   Every colour comes from magpie's --magpie-* tokens (set by _magpie/bridge.js
+   on <html>), with our own light/dark fallbacks for local preview.
+   Real tokens exposed by the bridge: bg fg accent accent-soft card code font
+   line muted. Everything else here is derived from those.
+   ========================================================================== */
+
+:root {
+  /* ---- fallbacks (light) — used only when magpie hasn't painted tokens --- */
+  --fb-bg: #fafafa;
