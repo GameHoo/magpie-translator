@@ -1,6 +1,6 @@
 # 旁路转述：译文不进原模型的会话
 
-插件是 magpie 的异步 gateway hook。它不改写 agent 已经拿到的回复。工作模型和翻译模型都是配置里的模型 id，magpie 里已经配好的 provider（含 grok、DeepSeek、Gemini 这类插件 provider）把 id 贴进来就能用，加一个新模型不用改插件代码。默认把面向用户的最终正文转成通俗中文；目标语言、提示词和展示出口都能改。译文出现在本机页面、日志、文本文件、桌面通知或一个 webhook 上。
+插件包名是 magpie-translator。它是 magpie 的异步 gateway hook，不改写 agent 已经拿到的回复。工作模型和翻译模型都是配置里的模型 id，magpie 里已经配好的 provider（含 grok、DeepSeek、Gemini 这类插件 provider）把 id 贴进来就能用，加一个新模型不用改插件代码。`language` 写成任意人类读得懂的语言名，默认是 `简体中文`。默认提示词是英文指令，把这个名字嵌进去，不另写一套中文指令。提示词和展示出口也能改。译文出现在本机页面、日志、文本文件、桌面通知或一个 webhook 上。
 
 核验日期：2026-10-27。状态：已定稿。对照的是本机 magpie 0.1.1731、当天的 [gateway hooks 文档](https://github.com/yetone/magpie/blob/main/docs/subsystems/gateway-request-hooks.md)、`internal/gateway/gateway_hooks.go`、`internal/provider/chatgpt_api.go`，以及当天能读到的 Codex 与 Claude Code 公开资料。
 
@@ -28,14 +28,14 @@
 
 | 字段 | 默认 | 作用 |
 | --- | --- | --- |
-| `language` | `简体中文` | 默认提示词里的目标语言，写人类读得懂的名字，如 `日本語`、`English` |
-| `prompt` | 空 | 非空时只换掉「改写成某种语言」那一句，最长 4000 字。系统提示仍以内部记号开头，并保留「占位符必须原样保留」和「只输出正文」 |
+| `language` | `简体中文` | 默认提示词里的目标语言，写人类读得懂的名字，如 `English`、`日本語`、`Français` |
+| `prompt` | 空 | 非空时只换掉任务句，最长 4000 字。系统提示仍以内部记号开头。任务句默认是 `Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary.` 固定留下两句：`Placeholders such as ⟦0⟧ and ⟦1⟧ stand for code or commands. Keep each one exactly where it is, including the brackets and the number. Do not translate, delete, or move them.` 以及 `Output only the rewritten text.` |
 | `style` | 空 | 追加的一句口气要求，最长 4000 字 |
 | `display` | `panel,log` | 出口，见下一张表。可以是数组，或用逗号、空格分开的字符串 |
 | `webhookUrl` | 空 | `display` 含 `webhook` 时，把转述 POST 到这个 http(s) 地址 |
 | `rules` | 空数组 | 空则什么都不转述 |
 
-另外四个全局项不进规则：`panelPort`（默认 44721）、`magpieBaseUrl`（默认读 `~/.config/magpie/settings.json` 的端口，否则 `http://127.0.0.1:3425`）、`gatewayKey`（工人回叫本机 magpie 用的钥匙，默认 `magpie-plain-zh`，不是厂商密钥）、`gatewayTimeoutMs`（只限制 hook 写收件箱的时间，允许 100–10000 毫秒；`package.json` 的 `magpie.options` 里写的是 2000）。翻译发生在 hook 返回之后，单次上限 90 秒。
+另外四个全局项不进规则：`panelPort`（默认 44721）、`magpieBaseUrl`（默认读 `~/.config/magpie/settings.json` 的端口，否则 `http://127.0.0.1:3425`）、`gatewayKey`（工人回叫本机 magpie 用的钥匙，默认 `magpie-translator`，不是厂商密钥）、`gatewayTimeoutMs`（只限制 hook 写收件箱的时间，允许 100–10000 毫秒；`package.json` 的 `magpie.options` 里写的是 2000）。翻译发生在 hook 返回之后，单次上限 90 秒。
 
 展示出口有 6 个，写进 `display` 的都会做，不认识的名字会被忽略：
 
@@ -82,15 +82,15 @@ magpie 的 [hooks 文档](https://github.com/yetone/magpie/blob/main/docs/subsys
 
 一次命中规则的最终回复，经过下面 5 步。第 1 步失败时，请求仍按原样转发出去。从第 2 步起 agent 收到的是原文，旁边的失败不再改那份回复。
 
-1. `onRequest` 只做一件事：请求的 system / instructions / developer 里若有内部记号 `MAGPIE_PLAIN_ZH_SIDECAR_v1`，就在 `ctx.state.own` 做标记。不改请求体。这个记号和目标语言无关，用来认出工人自己发出的翻译请求，避免翻译模型的回复再被拿去翻译。
+1. `onRequest` 只做一件事：请求的 system / instructions / developer 里若有内部记号 `MAGPIE_TRANSLATOR_SIDECAR_v1`，就在 `ctx.state.own` 做标记。不改请求体。这个记号和目标语言无关，用来认出工人自己发出的翻译请求，避免翻译模型的回复再被拿去翻译。
 2. magpie 照常向上游要这一轮，并把流原样写给客户端。
 3. `onResponse` 在 `success === true`、且 magpie 捕获到的整段不超过 8MiB 时被调用。8MiB 是 magpie 的捕获上限，写在 hooks 文档里。回调不修改回复对象。不命中规则、是自己的翻译请求、或正文抽出来是空的，就返回。
 4. 抽出来的正文把代码换成占位符 `⟦0⟧`、`⟦1⟧`，连同语言和提示词写进数据目录的 `inbox/`。hook 顺手拉起本机工人（同一数据目录已有活着的进程就不再拉）。这一步写盘失败时，收件箱里没有这条，页面和日志也不会有。
-5. 工人把这条任务 POST 回 magpie 的 `/v1/chat/completions`，模型 id 用规则里的 `translator`。系统提示以记号开头，接着是「改写成某种语言」或你的 `prompt`，然后固定留下「占位符必须原样保留」和「只输出正文」。回来的文本把对得上的占位符换回原来的代码。丢掉的那几段补在末尾，已经嵌回的不重复。然后按 `display` 送出。翻译请求失败或没有返回文字时，出口上留下原文和错误原因。
+5. 工人把这条任务 POST 回 magpie 的 `/v1/chat/completions`，模型 id 用规则里的 `translator`。系统提示以记号开头，接着是默认任务句或你的 `prompt`。默认任务句把 `language` 的名字嵌进英文指令。然后固定留下占位符那一句和 `Output only the rewritten text.` 回来的文本把对得上的占位符换回原来的代码。丢掉的那几段补在末尾，已经嵌回的不重复。然后按 `display` 送出。翻译请求失败或没有返回文字时，出口上留下原文和错误原因。
 
 工人的请求不带 `X-Magpie-Session`。magpie 的会话文档写明：没有会话 id 的请求不会被编成一条打得开的会话记录，网关也不用正文去猜测它属于哪一次对话。agent 的下一轮来自它自己的记录，不来自这个旁路请求。
 
-数据目录是 `$MAGPIE_PLAIN_ZH_HOME`，否则是 `$XDG_DATA_HOME/magpie-plain-zh`，再否则是 `~/.local/share/magpie-plain-zh`。里面有 `inbox/`、`log.jsonl`、`latest.txt` 和 `panel.pid`。
+数据目录是 `$MAGPIE_TRANSLATOR_HOME`，否则是 `$XDG_DATA_HOME/magpie-translator`，再否则是 `~/.local/share/magpie-translator`。里面有 `inbox/`、`log.jsonl`、`latest.txt` 和 `panel.pid`。
 
 ## 只翻译最终正文
 
@@ -109,7 +109,7 @@ magpie 的 [hooks 文档](https://github.com/yetone/magpie/blob/main/docs/subsys
 
 2026-10-27 在这台机器上核对过的部分：
 
-- `npm test` 25 项通过。其中「下一轮发给原模型的请求不含译文」用 Responses、Anthropic、Chat、Gemini 四种客户端会落盘的材料组出下一轮请求，断言里面没有译文、记号和网关钥匙，原文、代码和推理还在。对照项证明：若流里的正文已被改成译文，下一轮请求就会带上它。工具轮不会产生翻译任务。
+- `npm test` 26 项通过。其中「下一轮发给原模型的请求不含译文」用 Responses、Anthropic、Chat、Gemini 四种客户端会落盘的材料组出下一轮请求，断言里面没有译文、记号和网关钥匙，原文、代码和推理还在。对照项证明：若流里的正文已被改成译文，下一轮请求就会带上它。工具轮不会产生翻译任务。另有一条把 `language` 设成 `Français`，断言默认提示词里出现这个名字，并且提示正文没有中文字。
 - 另一项测试把翻译模型写成 `community/brand-new-model`、`plugin-grok/grok-4` 这类任意字符串，断言发出去的 `model` 就是这个字符串，并且运行时代码里没有厂商模型表。
 - 语言、自定义提示词、规则覆盖、以及「只开 log / file / webhook、不监听网页」有单独测试。webhook 的 JSON 里没有网关钥匙。
 - 本机 magpie 0.1.1731 的端到端：自定义 OpenAI 兼容上游，规则把 `gpt-work` 指到 `mock/translator-zh`，目标语言设成记号 `LangTokenE2E`。客户端收到的 Chat 流是英文，代码命令仍在原文里。面板上是中文，命令被嵌回。翻译请求再次经过 magpie，正文里有这个语言记号和占位符，没有原始命令，且只发出一次。用客户端实际收到的英文组出的第二轮，经 magpie 转到工作模型的上游请求体里没有中文译文、没有语言记号、没有内部记号。同一轮还看了 `/v1/responses` 和 `/v1/messages`：客户端流是英文，不含译文。这两条协议的「续轮上游请求体」没有再在真实网关上跑，续轮形状由单元测试覆盖。
