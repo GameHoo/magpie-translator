@@ -13,6 +13,7 @@
     "docs/DESIGN.md",
     "docs/panel_success.png",
     "docs/panel_failure.png",
+    "docs/panel_settings.png",
     "LICENSE"
   ],
   "scripts": {
