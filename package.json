@@ -1,7 +1,7 @@
 {
   "name": "magpie-translator",
   "version": "0.1.0",
-  "description": "magpie plugin: translate one model's final reply with another configured model, into any target language, without writing the translation into the original session",
+  "description": "magpie plugin: a second model retells one model's final reply in the style your prompt asks (plain language, tone, language, structure), without writing it into the original session",
   "type": "module",
   "bin": {
     "magpie-translator": "./src/panel.mjs"
@@ -24,8 +24,10 @@
   "keywords": [
     "magpie",
     "magpie-hooks",
+    "magpie-plugin",
+    "rewrite",
     "translation",
-    "magpie-plugin"
+    "llm"
   ],
   "license": "MIT",
   "engines": {

@@ -4,29 +4,120 @@
 
 <h1 align="center">magpie-translator</h1>
 
-<p align="center">一个模型在干活，另一个模型把它的最终回复改写成「人话」。语言由你选，原文照常回到会话，译文一个字也不进去。</p>
+<p align="center">一个模型干活，另一个模型按你的提示词把它的最终回复「转述」一遍：说人话、换语气、换语言、加结构、加图示都行。原文照常回到会话，转述一个字也不进去。</p>
 
 <p align="center"><a href="README.en.md">English</a> · <a href="docs/DESIGN.md">设计与核验记录</a> · MIT</p>
 
 ---
 
-## 为什么要「旁路」
+## 它是什么
 
-如果在 Codex、Claude Code 里让模型直接用中文回复，会话历史存的就是中文，下一轮模型读到的也是中文。上下文变了，token 也更多。
+[magpie](https://github.com/yetone/magpie) 的插件。核心不是「翻译」，而是一层通用的**转述层**：
 
-magpie-translator 是 [magpie](https://github.com/yetone/magpie) 的插件，它不碰这条链路。工作模型这一轮答完后，插件把最终回复交给你在 magpie 里配好的另一个模型，改写成直白的目标语言，结果放进 magpie 里的「翻译记录」页。
+- 工作模型（比如 Codex 背后的 GPT）照常回答，agent 收到的是原文，会话历史不变；
+- 这一轮结束后，插件把最终回复交给你选的**第二个模型**，按**提示词**重新表达一遍；
+- 转述结果放在 magpie 侧栏的「翻译记录」页（也可以写到日志、文件、通知、webhook），**永远不进原会话**，下一轮请求里也没有它；
+- 代码块、行内代码和 `$ ` 开头的命令先换成占位符，转述完原样放回。
 
-- **agent 收到的仍是原文**：插件不改 magpie 写给客户端的字节，也不改写流。
-- **下一轮请求里没有译文**：翻译请求单独发给本机 magpie，不带会话 id，不会写回工作模型的上下文。测试 `下一轮发给原模型的请求不含译文` 专门核对这一点。
-- **代码不动**：代码块、行内代码和以 `$ ` 开头的命令先换成占位符，翻译完再原样放回。
+翻译只是其中一种用法。提示词换一换，同一个插件就能：
 
-## 截图
+| 想要的效果 | 提示词大意 |
+| --- | --- |
+| 说人话 | 把技术回答改成非程序员也看得懂的话 |
+| 换语言 | 忠实翻译成 `{language}` |
+| 加结构 / 加图示 | 一句结论 + 要点列表 + 一张 mermaid 流程图 |
+| 换语气 | 像给初学者讲一样，温和、带个生活类比 |
 
-<!-- TODO: 在 magpie 里截「翻译设置」面板，存为 docs/settings.png（1440 宽，浅色主题） -->
-![magpie 设置里的「翻译设置」面板：目标语言、风格、翻译规则和提示词](docs/settings.png)
+> 关于「加图」：插件只是把第二个模型的输出原样存下来。模型能写出 mermaid 代码块或 Markdown 图片链接，但**能不能画出来取决于显示的地方**（GitHub 会渲染 mermaid；「翻译记录」页是否渲染 mermaid / 外链图片请以实际为准）。插件不会自己生成图片。
 
-<!-- TODO: 在 magpie 侧栏「翻译记录」页截一张有 2～3 条记录的图，其中一条展开「用其他模型对比」，存为 docs/history.png -->
-![「翻译记录」页：左边是记录列表，右边原文和译文并排，还有另一个模型的对比译文](docs/history.png)
+## 提示词怎么配（以代码为准）
+
+- **全局提示词** `prompt`：替换默认任务句。可用变量 `{language}`、`{style}`、`{model}`（原始模型）、`{translator}`（转述模型）。留空时用默认句：把文本改写成通俗易读的 `{language}`，不增删信息。
+- **风格** `style`：追加在提示词后面的一段要求。面板有四个预设：直白人话、保留术语、简洁、详细；也可以自己写。
+- **每条规则单独覆盖**：规则里可以写自己的 `language`、`prompt`、`style`、`display`、`webhookUrl`，比如 GPT 的回复用 A 提示词交给模型 X，其他模型用 B 提示词交给模型 Y。
+- 不管怎么改，插件都会保留：防回环的内部标记、「占位符原样保留」规则、「只输出改写后的内容」。
+
+## 真实例子
+
+以下 4 个例子是 2026-10-27 在真实 magpie（DF03 机器）上跑出来的：请求通过本机网关 `127.0.0.1:3425` 发给 `codex/gpt-6.1-sol`，插件按规则 `gpt-*` 交给 **`traex/gemini-3-flash`** 转述，原文和转述取自插件的 `log.jsonl`。只做了截断（标 `…`），没有改字。
+
+### 例 1：说人话（技术回答 → 通俗中文）
+
+提示词：`Rewrite the user's text into plain, easy-to-read {language} that a non-programmer can follow. Keep code unchanged.`
+
+原文（GPT，节选）：
+> A database index is an auxiliary data structure, typically a B-tree or hash table, that maps indexed column values to row locations. It speeds up reads by letting the query optimizer use an index scan or seek instead of a full table scan. …
+
+转述（Gemini，节选）：
+> 数据库索引就像是书的目录，通常采用 B-tree 或哈希表结构，将数据的值对应到它在表中的具体位置。它能让数据库在查询时直接跳到目标位置，而不需要扫描整张表，从而显著提高读取速度。…
+>
+> 然而，索引会使写入速度变慢。因为每当你执行 INSERT、UPDATE 和 DELETE 操作时，数据库都必须同步维护所有相关的索引。…
+
+### 例 2：翻译（英文 → 中文，代码不动）
+
+提示词：`Translate the user's text into {language} faithfully. Keep the original structure and code.`
+
+原文（节选）：
+> `git rebase -i HEAD~3` starts an **interactive rebase** of the last three commits on your current branch. It lets you reorder, combine, edit, or remove those commits. …
+>
+> Change the second `pick` to `squash` to combine C with B. Save and close; Git prompts you to edit the combined commit message, then replays D.
+
+转述（节选）：
+> `git rebase -i HEAD~3` 会启动当前分支最后三个提交的**交互式变基**。它允许你对这些提交进行重新排序、合并、编辑或删除。…
+>
+> 将第二个 `pick` 改为 `squash`，以将 C 合并到 B 中。保存并关闭；Git 会提示你编辑合并后的提交信息，然后重新应用 D。
+
+### 例 3：加结构 + mermaid 图
+
+提示词：``Summarize the user's text in {language} as: a one-line conclusion, a bullet list of key points, then a ```mermaid flowchart``` diagram of the process.``
+
+原文（节选）：
+> When you type an HTTPS URL into your browser, several steps happen:
+> 1. **Find the server.** The browser checks its cache or uses DNS … 2. **Establish a secure connection.** … 5. **Display the page.** …
+
+转述（完整，未截断）：
+
+访问 HTTPS 网站的过程是从域名解析开始，通过建立安全加密连接来请求和接收数据，最终由浏览器渲染出网页的完整流程。
+
+*   **查找服务器**：浏览器通过缓存或 DNS 系统将域名转换为 IP 地址。
+*   **建立安全连接**：通过 TCP 连接和 TLS 握手验证服务器身份并加密通信（HTTP/3 则使用集成的 QUIC 协议）。
+*   **发送请求**：在加密通道中发送包含路径、请求头和 Cookie 的 HTTP 请求。
+*   **接收响应**：服务器处理请求并返回包含状态码、响应头和 HTML 内容的数据。
+*   **显示页面**：浏览器解析 HTML，获取 CSS、JS 等资源，计算布局并完成页面渲染。
+
+```mermaid
+graph TD
+    A[输入 URL] --> B[DNS 解析获取 IP 地址]
+    B --> C[建立 TCP/TLS 加密连接]
+    C --> D[发送 HTTP 请求]
+    D --> E[接收 HTTP 响应]
+    E --> F[解析 HTML 并加载资源]
+    F --> G[浏览器渲染页面]
+```
+
+### 例 4：换语气（讲给初学者听）
+
+提示词：`Retell the user's text in {language} for a complete beginner, in a warm, encouraging tone, using one everyday analogy. Keep code unchanged.`
+
+原文（节选）：
+> A **race condition** occurs when a program's result depends on the unpredictable timing of concurrent operations. For example, two threads may read the same counter value, both add one, and then both write the same result. One increment gets lost. …
+
+转述（节选）：
+> 嘿！别担心，编程中的一些概念听起来很高级，但其实和我们的日常生活很像。
+>
+> 想象一下你和好朋友正在一起往存钱罐里存钱。存钱罐旁边有一张小纸条记录着总金额，现在写着“10元”。…
+>
+> 为了不让辛苦存的钱变没，我们可以给纸条加一把“魔法锁”，也就是 `threading.Lock`。…
+
+（这次实测里，Python 代码块被原样保留，但模型把它放进了一句话中间：「这种情况就像 ```python … ``` 展示的一样」。代码本身没改，只是位置受模型和提示词影响。）
+
+## 界面预览
+
+> 下面两张是**设计稿截图（design preview）**，不是 magpie 里的实拍，实际界面可能略有出入。
+
+![设计预览：magpie 设置里的「翻译设置」面板](docs/preview-settings.png)
+
+![设计预览：「翻译记录」页，原文与转述并排，并有另一个模型的对比](docs/preview-history.png)
 
 ## 安装
 
@@ -41,7 +132,7 @@ magpie plugin add github:GameHoo/magpie-translator
 magpie plugin list                       # 查看插件名
 ```
 
-也可以在 magpie 的 **插件 → 发现 → 非官方** 里安装。仓库打了 `magpie-plugin` topic，所以会出现在那里。
+也可以在 magpie 的 **插件 → 发现 → 非官方插件 · GitHub** 里找到并安装：magpie 会搜索打了 `magpie-plugin` topic 的仓库（不含 fork 和已归档仓库，最多每十分钟刷新一次）。
 
 开关与更新：
 
@@ -67,13 +158,13 @@ magpie models                            # 每一行 provider/model 都可以当
 magpie plugin options magpie-translator '{
   "language": "简体中文",
   "rules": [
-    { "model": "gpt-*", "translator": "traex/doubao-seed-2.1-pro" },
+    { "model": "gpt-*", "translator": "traex/gemini-3-flash" },
     { "model": "*",     "translator": "grok/grok-4.7-build-fast" }
   ]
 }'
 ```
 
-上面的翻译模型 id 只是举例，换成你自己 `magpie models` 里的任意一行。规则从上往下匹配，命中第一条就停：这个例子里 GPT 系列交给豆包，其余模型交给 Grok。
+上面的翻译模型 id 只是举例，换成你自己 `magpie models` 里的任意一行。规则从上往下匹配，命中第一条就停：这个例子里 GPT 系列交给 Gemini，其余模型交给 Grok。
 
 配好后，让 Codex、Claude Code 之类的客户端照常通过 magpie 答一轮，再打开 magpie 侧栏的 **翻译记录**。
 
