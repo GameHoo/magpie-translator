@@ -116,8 +116,8 @@ function magpieEnv(home) {
     HOME: home,
     XDG_CONFIG_HOME: path.join(home, ".config"),
     XDG_DATA_HOME: path.join(home, ".local", "share"),
-    MAGPIE_PLAIN_ZH_HOME: path.join(home, "plain-zh"),
-    MAGPIE_PLAIN_ZH_NO_SPAWN: "",
+    MAGPIE_TRANSLATOR_HOME: path.join(home, "translator"),
+    MAGPIE_TRANSLATOR_NO_SPAWN: "",
   }
 }
 
@@ -212,8 +212,8 @@ async function main() {
     console.error(`找不到 magpie：${MAGPIE}`)
     process.exit(2)
   }
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "magpie-plain-zh-e2e-"))
-  const plainHome = path.join(home, "plain-zh")
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "magpie-translator-e2e-"))
+  const plainHome = path.join(home, "translator")
   const gwPort = 34671
   const mockPort = 34672
   const panelPort = 44741
