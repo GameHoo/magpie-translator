@@ -115,7 +115,7 @@ hook 拿到的 `ctx.options` 是 Bun host 启动时抄下来的。`internal/plug
 
 对照翻译是这条通道里唯一一次由页面写入 options：`_compare` 带 nonce、记录 id 和另一个翻译模型。宿主因此重载一次。正在跑的工人大约每 2 秒看一眼 `plugins.json`；hook 的 `onRequest` 也会看。同一个 nonce 记在 `compare-seen.json` 里，只入队一次。结果写进那条记录的 `comparisons`，不新开卡片，也不再写一次 plugins.json 去清掉 `_compare`（再写会再重载一次）。普通保存会删掉 `_compare`。工人没在跑、而且之后没有新请求时，对照要等到下一次请求才会开始。
 
-`magpie plugin list` 把这个 hook 印成 `async gateway hook onRequest`，窗口空闲文案是 Waiting for a request。这两句不检查插件是否导出了 `onResponse`。本插件两个都导出。不调用 `ctx.report("ready")`，那会把状态说成「准备好往上下文里插内容」。
+`magpie plugin list` 把每一个异步 hook 都印成固定的 `async gateway hook onRequest`（`internal/cli/plugins_cli.go`），窗口空闲文案是 Waiting for a request。这两句不检查插件是否导出了 `onResponse`。翻译在 `onResponse`。`onRequest` 不改请求，只标出自己的翻译请求并接收对比 / 重试。不调用 `ctx.report("ready")`，那会把状态说成「准备好往上下文里插内容」。
 
 版面按 2026-10-27 批准的设计稿实现：`ui/style.css` 和 `ui/app.js`。设置页是选择器、风格卡片、规则流和提示词编辑区，没有手填模型的框。记录页是左右对照、失败卡片、窄屏标签，以及「用其他模型对比」。`options.set` 至少隔 1.1 秒一次。
 
@@ -125,7 +125,7 @@ hook 拿到的 `ctx.options` 是 Bun host 启动时抄下来的。`internal/plug
 - `providers:list` 没有模型 id。具体模型来自 `catalog.js` 和 `usage:summary`，厂商名来自 `providers:list`。接口不提供模型的副标题。
 - 导出不能下载文件。复制到剪贴板。
 - 记录里没有 token 数和请求 id。超时卡片用真实错误文字，不编一个 request id。
-- 提示词框里的中文模板在没改过时保存为空，翻译请求仍用内置英文任务句。
+- 提示词框里没改过时显示和默认任务句同一句英文，语言名的位置是 `{language}`。保存时空字符串，翻译时再把语言名填进去。
 - 「这个更好」只提示已记下，不改规则。
 - 页头开关写入 `enabled`，不是 magpie 的插件停用。
 - 同语言跳过的回复不进历史，和开关下的说明一致。页面仍能画出「已跳过」卡片，但钩子不会写出这种记录。
@@ -165,12 +165,12 @@ magpie 的 [hooks 文档](https://github.com/yetone/magpie/blob/main/docs/subsys
 1. `onRequest` 只做一件事：请求的 system / instructions / developer 里若有内部记号 `MAGPIE_TRANSLATOR_SIDECAR_v1`，就在 `ctx.state.own` 做标记。不改请求体。这个记号和目标语言无关，用来认出工人自己发出的翻译请求，避免翻译模型的回复再被拿去翻译。
 2. magpie 照常向上游要这一轮，并把流原样写给客户端。
 3. `onResponse` 在 magpie 捕获到整段（不超过文档里写的 8MiB）时被调用。`success === false` 但回复对象里仍有正文时也入队；抽不出正文就返回。回调不修改回复对象。不命中规则、是自己的翻译请求、是侧请求（纯 JSON、结构化输出、标题或建议助手、没有用户轮次），或在 `rewriteSameLanguage` 关闭时原文已经是目标语言，就返回。
-4. 抽出来的正文把代码换成占位符 `⟦0⟧`、`⟦1⟧`，连同语言和提示词写进数据目录的 `inbox/`。hook 顺手拉起本机工人（同一数据目录已有活着的进程就不再拉）。这一步写盘失败时，收件箱里没有这条，记录和日志也不会有。
+4. 抽出来的正文把代码换成占位符 `⟦0⟧`、`⟦1⟧`，连同语言和提示词写进数据目录的 `inbox/`。hook 顺手拉起本机工人。`panel.pid` 里是进程号加上插件版本、`src/*.mjs` 的哈希和安装目录。活着的进程对不上这份身份就先停掉再起一个，避免更新之后旧代码继续往旧目录写 `ui/feed.js`。这一步写盘失败时，收件箱里没有这条，记录和日志也不会有。
 5. 工人把这条任务 POST 回 magpie 的 `/v1/chat/completions`，模型 id 用规则里的 `translator`。系统提示以记号开头，接着是默认任务句或你的 `prompt`。默认任务句把 `language` 的名字嵌进英文指令。然后固定留下占位符那一句和 `Output only the rewritten text.` 回来的文本把对得上的占位符换回原来的代码。丢掉的那几段补在末尾，已经嵌回的不重复。然后按 `display` 送出，并写入 `history.json` 和 `ui/feed.js`。单次等待 `translateTimeoutMs`，可重试的失败再试一次。翻译请求失败或没有返回文字时，记录和日志留下原文和错误原因。
 
 工人的请求不带 `X-Magpie-Session`。magpie 的会话文档写明：没有会话 id 的请求不会被编成一条打得开的会话记录，网关也不用正文去猜测它属于哪一次对话。agent 的下一轮来自它自己的记录，不来自这个旁路请求。
 
-数据目录是 `$MAGPIE_TRANSLATOR_HOME`，否则是 `$XDG_DATA_HOME/magpie-translator`，再否则是 `~/.local/share/magpie-translator`。里面有 `inbox/`、`log.jsonl`、`latest.txt`、`history.json`、`compare-seen.json` 和 `panel.pid`。
+数据目录是 `$MAGPIE_TRANSLATOR_HOME`，否则是 `$XDG_DATA_HOME/magpie-translator`，再否则是 `~/.local/share/magpie-translator`。里面有 `inbox/`、`log.jsonl`、`latest.txt`、`history.json`、`compare-seen.json` 和 `panel.pid`。工人启动时把 `log.jsonl` 里还没有对应历史记录的行补进 `history.json`，并写成新安装目录的 `ui/feed.js`。`plugins.json` 里这条插件的 `off` 为 true（`magpie plugin off`）时，工人等手头的任务结束就退出。
 
 Codex 走 magpie 的 agent 路由时，`src/middleware.mjs` 的 `onEvent` 会在 `response.completed` 或 `response.incomplete` 的 `output` 没有助手正文时，补上从 delta 和 `output_item.done` 拼出的 message。这段中间件不跑在 Codex 自己的 ChatGPT 登录透传上。那条路径若完成事件里完全没有 output，插件看不到主回复。2026-10-27 没有用真实 Codex 核对此项。
 

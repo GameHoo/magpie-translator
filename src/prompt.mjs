@@ -6,10 +6,13 @@ export const PROMPT_TOKENS = ["language", "style", "model", "translator"]
 
 const TASK_TAIL = "Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary."
 
+// 设置页提示词框在没改过时显示这一句。保存时仍写成空，翻译时再把 {language} 换成语言名。
+export const DEFAULT_TASK_TEMPLATE = `Rewrite the user's text into plain, easy-to-read {language}. ${TASK_TAIL}`
+
 // 空 prompt 用这一句。语言名字直接写进句子，不靠占位符。
 export function defaultTask(language) {
   const lang = typeof language === "string" && language.trim() ? language.trim() : DEFAULT_LANGUAGE
-  return `Rewrite the user's text into plain, easy-to-read ${lang}. ${TASK_TAIL}`
+  return DEFAULT_TASK_TEMPLATE.replaceAll("{language}", lang)
 }
 
 export function fillPlaceholders(template, vars = {}) {

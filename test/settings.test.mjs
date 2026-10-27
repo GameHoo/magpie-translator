@@ -7,7 +7,7 @@ import test from "node:test"
 import { modelsFromGateway, parseModelLines } from "../src/models.mjs"
 import { findPlugin, normalizeSettings, readPluginList } from "../src/options.mjs"
 import { startPanel } from "../src/panel.mjs"
-import { defaultTask } from "../src/prompt.mjs"
+import { DEFAULT_TASK_TEMPLATE, defaultTask } from "../src/prompt.mjs"
 import { SETTINGS_PAGE } from "../src/settings-page.mjs"
 
 function request(url, { method = "GET", headers = {}, body = "" } = {}) {
@@ -287,4 +287,8 @@ test("过长提示词在写入前被拒绝", () => {
 test("设置页默认任务句和代码里的是同一句", () => {
   assert.match(SETTINGS_PAGE, /Rewrite the user's text into plain, easy-to-read " \+ lang \+ "/)
   assert.equal(defaultTask("English"), "Rewrite the user's text into plain, easy-to-read English. Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary.")
+  assert.equal(defaultTask("English"), DEFAULT_TASK_TEMPLATE.replaceAll("{language}", "English"))
+  const app = fs.readFileSync(new URL("../ui/app.js", import.meta.url), "utf8")
+  assert.equal(app.includes(DEFAULT_TASK_TEMPLATE), true)
+  assert.equal(app.includes("你是 {translator}"), false)
 })

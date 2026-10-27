@@ -11,7 +11,9 @@ import { isOwnRequest } from "./own.mjs"
 import { magpieBaseUrl } from "./paths.mjs"
 import { skipReason } from "./turn.mjs"
 
-// magpie 要求异步 hook 导出 onRequest。这里不改请求体：返回 undefined，宿主保持原字节。
+// magpie 要求异步 hook 导出 onRequest，`magpie plugin list` 也固定印
+// “async gateway hook onRequest”，不看这里还导出了什么。翻译不在 onRequest。
+// onRequest 不改请求体：认出自己的翻译请求，并收下对比 / 重试。返回 undefined，宿主保持原字节。
 export async function onRequest(body, ctx) {
   try {
     noteCompare(ctx?.options, process.env)
@@ -56,7 +58,7 @@ export function noteCompare(options, env = process.env) {
   }, env)
 }
 
-// 宿主会丢掉这个函数的返回值，客户端那边的字节已经写完了。这里只把正文放进本机收件箱。
+// 翻译在这里。宿主会丢掉返回值，客户端那边的字节已经写完了。这里只把正文放进本机收件箱。
 export async function onResponse(reply, ctx) {
   try {
     if (!ctx || reply == null || typeof reply !== "object") return

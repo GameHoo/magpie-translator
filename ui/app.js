@@ -211,7 +211,7 @@
     { id: "full", label: "详细", style: "Translate the whole reply. Do not shorten it or leave anything out." },
   ];
   const TO = [10, 20, 30, 60, 90, 120];
-  const DEFAULT_PROMPT = "你是 {translator}，负责把编程 Agent（{model}）写给用户的最终回复改写成{language}。\n\n要求：\n- 风格：{style}。\n- 代码块、行内代码、命令、文件路径、URL 和报错原文一律保持不变。\n- 不补充原文没有的信息，不回答原文里的问题。\n- 保留原有的 Markdown 结构（标题、列表、表格）。\n\n只输出改写后的内容。";
+  const DEFAULT_PROMPT = "Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary.";
 
   let providers = [];
   let models = [];

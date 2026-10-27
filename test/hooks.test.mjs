@@ -23,6 +23,27 @@ function jobs(home) {
 
 const rule = { rules: [{ agent: "codex", model: "gpt-5.4", translator: "deepseek/deepseek-chat" }] }
 
+test("翻译由 onResponse 入队，onRequest 只标自己的请求", async () => {
+  const home = tempHome()
+  const reply = { choices: [{ message: { role: "assistant", content: "The cache invalidates when the file mtime changes." }, finish_reason: "stop" }] }
+  const ctx = {
+    success: true,
+    options: rule,
+    agent: "codex",
+    protocol: "chat",
+    model: "gpt-5.4",
+    request: { model: "gpt-5.4", messages: [{ role: "user", content: "explain" }] },
+    state: {},
+  }
+  await onRequest(ctx.request, ctx)
+  assert.equal(ctx.state.own, false)
+  assert.equal(jobs(home).length, 0)
+  await onResponse(reply, ctx)
+  assert.equal(jobs(home).length, 1)
+  assert.equal(jobs(home)[0].original.includes("mtime"), true)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
 test("onRequest 不改请求体", async () => {
   const body = { model: "gpt-5.4", stream: true, input: [{ role: "user", content: "hi" }] }
   const snapshot = structuredClone(body)
