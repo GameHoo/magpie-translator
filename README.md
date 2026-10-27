@@ -52,6 +52,18 @@ You need a local magpie that is already running, at version 0.1.1273 or later, a
 
 4. Let the work model answer one turn through magpie. Point the client magpie already routes (Codex, Claude Code, or another client) at magpie, then ask it something. Open <http://127.0.0.1:44721>. Before any matching reply, the page says there is no translation yet. After one, the card shows the language, work model, and translator from that turn. The page chrome is Chinese. The language of the translation is the `language` on the card, not the language of the chrome.
 
+The two pictures below are that page in a 1440-pixel-wide window, taken on 2026-10-27 from `npm run demo`. Headings and buttons stay Chinese. The language line on each card is that turn's `language`. In these pictures it is `简体中文`.
+
+A finished card keeps fenced commands in their original form. File: `docs/panel_success.png`.
+
+![Finished card. The status is 已转述. The translation is two Chinese sentences, and the command stat -c %Y file stays in a code block.](docs/panel_success.png)
+
+A card whose translator cannot be reached keeps the original sentence and shows the error. File: `docs/panel_failure.png`.
+
+![Failed card. The status is 转述失败. The error is fetch failed. The original English sentence is still on the card.](docs/panel_failure.png)
+
+`npm run demo` uses a fake translator on this machine, so this failure is a connection error. A live translator that returns an error shows that error text in the same place.
+
 `magpie.options` inside `package.json` is only an example. The live config is what `magpie plugin options` writes.
 
 ## How a rule matches
