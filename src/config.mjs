@@ -29,7 +29,8 @@ export function parseTimeout(value) {
 export function parseHistoryLimit(value) {
   const n = Number(value)
   if (!Number.isFinite(n)) return DEFAULT_HISTORY_LIMIT
-  return Math.min(2000, Math.max(20, Math.round(n)))
+  if (n <= 0) return 0
+  return Math.min(5000, Math.max(20, Math.round(n)))
 }
 
 export function parseFlag(value, fallback = false) {

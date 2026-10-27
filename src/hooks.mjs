@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { presentation } from "./config.mjs"
+import { parseFlag, presentation } from "./config.mjs"
 import { DEFAULT_GATEWAY_KEY, DEFAULT_PANEL_PORT, MAX_MASKED_CHARS } from "./constants.mjs"
 import { deliver } from "./enqueue.mjs"
 import { findHistory, hasSeen, markSeen } from "./history.mjs"
@@ -52,6 +52,7 @@ export function noteCompare(options, env = process.env) {
     translateTimeoutMs: presentation(options).translateTimeoutMs,
     display: ["log"],
     localPanel: false,
+    replace: request.replace === true,
   }, env)
 }
 
@@ -60,6 +61,8 @@ export async function onResponse(reply, ctx) {
   try {
     if (!ctx || reply == null || typeof reply !== "object") return
     if (ctx.state?.own || isOwnRequest(ctx.request)) return
+    const options = ctx.options || {}
+    if (!parseFlag(options.enabled, true)) return
     const model = ctx.request?.model ?? ctx.model ?? ""
     const rule = matchRule(ctx.options, { agent: ctx.agent || "", model })
     if (!rule) return
@@ -74,7 +77,6 @@ export async function onResponse(reply, ctx) {
       text = text.slice(0, MAX_MASKED_CHARS)
       truncated = true
     }
-    const options = ctx.options || {}
     const view = presentation(options, rule)
     if (!view.rewriteSameLanguage && sameLanguage(masked.prose, view.language)) return
     deliver({

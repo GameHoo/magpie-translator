@@ -5,7 +5,7 @@ import { parseHistoryLimit } from "./config.mjs"
 import { dataDir, ensureDir } from "./paths.mjs"
 import { writeFeed } from "./publish.mjs"
 
-const PUBLIC = ["id", "at", "agent", "model", "translator", "language", "ms", "original", "translation", "error", "status"]
+const PUBLIC = ["id", "at", "agent", "model", "translator", "language", "style", "ms", "original", "translation", "error", "status"]
 
 export function historyPath(env = process.env) {
   return path.join(dataDir(env), "history.json")
@@ -21,6 +21,12 @@ export function readHistory(env = process.env) {
 }
 
 export function recordTranslation(entry, env = process.env, limit = DEFAULT_HISTORY_LIMIT) {
+  const cap = parseHistoryLimit(limit)
+  if (cap === 0) {
+    writeHistory([], env)
+    publish([], env)
+    return null
+  }
   const row = {
     id: String(entry.id || ""),
     at: entry.at || new Date().toISOString(),
@@ -38,10 +44,10 @@ export function recordTranslation(entry, env = process.env, limit = DEFAULT_HIST
     masked: entry.masked || "",
     slots: Array.isArray(entry.slots) ? entry.slots : [],
     magpieBaseUrl: entry.magpieBaseUrl || "",
+    truncated: !!entry.truncated,
     comparisons: [],
   }
   if (!row.id) return null
-  const cap = parseHistoryLimit(limit)
   const next = [row, ...readHistory(env).filter((item) => item.id !== row.id)].slice(0, cap)
   writeHistory(next, env)
   publish(next, env)
@@ -66,6 +72,19 @@ export function addComparison(entryId, comparison, env = process.env) {
   return publicEntry(row)
 }
 
+export function replaceTranslation(entryId, patch, env = process.env) {
+  const rows = readHistory(env)
+  const row = rows.find((item) => item.id === entryId)
+  if (!row) return null
+  row.translation = patch.translation || ""
+  row.error = patch.error || ""
+  row.ms = Number(patch.ms) || 0
+  row.status = row.error ? "error" : "done"
+  writeHistory(rows, env)
+  publish(rows, env)
+  return publicEntry(row)
+}
+
 export function findHistory(id, env = process.env) {
   return readHistory(env).find((item) => item.id === id) || null
 }
@@ -73,6 +92,7 @@ export function findHistory(id, env = process.env) {
 export function publicEntry(entry) {
   const view = {}
   for (const key of PUBLIC) view[key] = entry[key] ?? (key === "ms" ? 0 : "")
+  view.truncated = !!entry.truncated
   view.comparisons = (Array.isArray(entry.comparisons) ? entry.comparisons : []).map((item) => ({
     id: item.id || "",
     translator: item.translator || "",
