@@ -1,6 +1,6 @@
 # 旁路转述：译文不进原模型的会话
 
-插件包名是 magpie-translator。它是 magpie 的异步 gateway hook，不改写 agent 已经拿到的回复。工作模型和翻译模型都是配置里的模型 id，magpie 里已经配好的 provider（含 grok、DeepSeek、Gemini 这类插件 provider）把 id 贴进来就能用，加一个新模型不用改插件代码。`language` 写成任意人类读得懂的语言名，默认是 `简体中文`。默认提示词是英文指令，把这个名字嵌进去，不另写一套中文指令。提示词和展示出口也能改。译文出现在本机页面、日志、文本文件、桌面通知或一个 webhook 上。
+插件包名是 magpie-translator。它是 magpie 的异步 gateway hook，不改写 agent 已经拿到的回复。工作模型和翻译模型都是配置里的模型 id，magpie 里已经配好的 provider（含 grok、DeepSeek、Gemini 这类插件 provider）把 id 贴进来就能用，加一个新模型不用改插件代码。`language` 写成任意人类读得懂的语言名，默认是 `简体中文`。默认提示词是英文指令，把这个名字嵌进去，不另写一套中文指令。提示词和展示出口也能改。译文出现在本机页面、日志、文本文件、桌面通知或一个 webhook 上。本机页面的「设置」写回 magpie 的 `plugins.json`，和命令行 `magpie plugin options` 改的是同一份。
 
 核验日期：2026-10-27。状态：已定稿。对照的是本机 magpie 0.1.1731、当天的 [gateway hooks 文档](https://github.com/yetone/magpie/blob/main/docs/subsystems/gateway-request-hooks.md)、`internal/gateway/gateway_hooks.go`、`internal/provider/chatgpt_api.go`，以及当天能读到的 Codex 与 Claude Code 公开资料。
 
@@ -24,12 +24,12 @@
 
 上面的 id 是例子。换成你机器上 `magpie models` 的任意一行即可，例如某个 grok 插件列出的那条。
 
-6 个全局项，规则里同名的字段会盖过全局：
+表里有 6 行。前 5 行可以写在一条规则上，盖过全局的同名字段。最后一行 `rules` 是规则列表，不能在某一条规则里再嵌一份：
 
 | 字段 | 默认 | 作用 |
 | --- | --- | --- |
 | `language` | `简体中文` | 默认提示词里的目标语言，写人类读得懂的名字，如 `English`、`日本語`、`Français` |
-| `prompt` | 空 | 非空时只换掉任务句，最长 4000 字。系统提示仍以内部记号开头。任务句默认是 `Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary.` 固定留下两句：`Placeholders such as ⟦0⟧ and ⟦1⟧ stand for code or commands. Keep each one exactly where it is, including the brackets and the number. Do not translate, delete, or move them.` 以及 `Output only the rewritten text.` |
+| `prompt` | 空 | 非空时只换掉任务句，最长 4000 字。系统提示仍以内部记号开头。任务句默认是 `Rewrite the user's text into plain, easy-to-read 简体中文. Keep the meaning the same as the original. Do not add information that is not in the original. Do not add a preamble or a summary.` 这里的「简体中文」换成当时的 `language`。自定义任务句和 `style` 里可以写 `{language}`、`{style}`、`{model}`、`{translator}`，发出翻译请求前替换一次；不认识的花括号原样留下。固定留下两句：`Placeholders such as ⟦0⟧ and ⟦1⟧ stand for code or commands. Keep each one exactly where it is, including the brackets and the number. Do not translate, delete, or move them.` 以及 `Output only the rewritten text.` |
 | `style` | 空 | 追加的一句口气要求，最长 4000 字 |
 | `display` | `panel,log` | 出口，见下一张表。可以是数组，或用逗号、空格分开的字符串 |
 | `webhookUrl` | 空 | `display` 含 `webhook` 时，把转述 POST 到这个 http(s) 地址 |
@@ -51,6 +51,38 @@
 规则按书写顺序，第一条命中的生效。`agent` 省略表示不限制客户端，`model` 省略表示不限制模型。`agent` 是整词、不区分大小写，要和面板卡片上显示的名字一致。`model` 写成 `vendor/name` 或光写 `name` 都能对上 magpie 给出的完整 id；光写 `name` 时对得上 `name`，对不上 `name-mini`。只有末尾加 `*` 才做前缀匹配，例如 `gpt-5*`、`claude-*`。
 
 magpie 交给 hook 的协议名目前是 `chat`、`responses`、`anthropic`、`gemini` 四种线格式。插件按这四种 JSON 形状取正文。一个新的 provider 只要仍从这四种入口进来，就不用改插件。magpie 若将来增加第五种 JSON 形状，抽取函数才要加一支。
+
+## 设置页写回 plugins.json
+
+本机设置页直接改 `plugins.json` 里这个插件的 `options`。这和 `magpie plugin options <名字> '<json>'` 改的是同一份。hook 没有写回自己 options 的接口。已经在跑的 magpie 不用重启：下一轮请求发现这个文件变了，会重新加载。
+
+打开 `http://127.0.0.1:<panelPort>/settings`。页面上能改全局的语言、提示词、style、展示方式，也能增删改规则的顺序、agent、model 和翻译模型。翻译模型从 magpie 列出来的 id 里选，列表里没有的可以手填。提示词是多行的。点「恢复默认」会把那一栏清空，保存后用默认任务句。`gatewayKey`、`panelPort`、`magpieBaseUrl`、`gatewayTimeoutMs` 不在表单上，保存时按原值留下。表单也改不了这些字段：请求体里夹带的同名字段会被丢掉。
+
+三个看起来像「插件写自己的配置」的入口，只有 `plugins.json` 这一份是 hook 的 `ctx.options`：
+
+| 入口 | 实际写到哪 | 这个面板用不用 |
+| --- | --- | --- |
+| `magpie plugin options` | `~/.config/magpie/plugins.json` 里该插件的 `options`。`SetOptions`（`internal/plugin/store.go`）整份替换后保存 | 用。面板写同一个字段 |
+| `await magpie.options.set(o)` | 同样是这份 options，但只在 magpie 窗口里的插件页里存在。页头要有 `<script src="_magpie/bridge.js"></script>`，页面自己到不了网络 | 不用。本机面板是另一个 Node 进程 |
+| `POST /api/settings/plugin-option` | `settings.json` 里的布尔开关 `pluginOptions`，给 provider 插件用 | 不用。那不是 hook 的 options |
+
+hook 拿到的 `ctx.options` 是 Bun host 启动时抄下来的。`internal/plugin/host.js` 把每个 gateway hook 收成 `{ spec, options }`，每次请求再 `structuredClone` 一份交给 `onRequest`。hook 里改这个对象不会写回磁盘，下一轮也不记得。
+
+命令行 `plugin options` 跑在另一个进程里。它的 `Restart()` 只重启那个进程自己的 host，不会直接碰到正在 `magpie serve` 的那一个。正在服务的进程靠文件发现变化：`GatewayBegin` 调 `checkList()`，`plugins.json` 的修改时间或大小变了就把 host 标成过期；`getLocked` 再拉起一个新 host，新 host 读到新的 options。所以下一轮请求用的是新配置。已经进了 `onResponse` 的那一轮仍用旧的。
+
+2026-10-27 在这台机器的 magpie 0.1.1731 上核对过，配置目录是临时的 `HOME=/tmp/magpie-reload-probe`：
+
+1. `magpie plugin options` 把 `language` 写成 `Français`。向网关发一次 Chat 请求（模型不存在，HTTP 404）。hook 仍被调用，记下的语言是 `Français`。
+2. 不重启 serve，直接把 `plugins.json` 里的 `language` 改成 `English` 并加上 `gatewayKey`。下一次请求记下 `English` 和这把钥匙。
+3. 再跑一次 `magpie plugin options` 把语言改成 `日本語`。再下一次请求记下 `日本語`。另一条插件、它的 `off`、以及文件顶上的 `config` 都还在。
+
+因此面板自己写这个文件，不去调用 `magpie` 可执行文件。服务进程本来就是看文件重新加载的，而 hook 拉起的面板不一定找得到 `magpie` 这条命令。写法是先写临时文件再改名盖上 `plugins.json`，模式 `0600`。只替换这一条插件的 `options`。别的插件、`off`、`config`、`prefer` 不动。解析之后如果和磁盘上的对象相同，就不写，避免 magpie 白白重启 host。
+
+面板只 `listen` 在 `127.0.0.1`。`POST /api/settings` 要带 `GET /api/settings` 发下来的 `x-magpie-translator-csrf`，并且 `Content-Type` 是 `application/json`。`Host` 不是 `127.0.0.1` 或 `localhost` 加本端口、`Origin` 或 `Referer` 指向别处、`Sec-Fetch-Site` 是 `cross-site` 或 `same-site`，都回 403。响应不带 `Access-Control-Allow-Origin`。令牌只出现在这个页面能读到的 JSON 里，别的网站读不到。
+
+对上哪一条插件：spec 是路径时，realpath 要等于这个包的目录；spec 是 `github:` 或 npm 名时，用 `plugins/package.json` 的 `dependencies` 找到包名，再对 `plugins/node_modules/<包名>`。环境变量 `MAGPIE_TRANSLATOR_PLUGIN` 可以指定 `magpie plugin list` 印出来的那条 spec。对不上时页面说明要先 `magpie plugin add`，并且不会新建 `plugins.json`。
+
+还没有在这台机器上点过 magpie 窗口里的 Options 按钮。那颗按钮走的也是 `SetOptions`。没有故意制造改名写到一半的崩溃。两个进程同时写时，后一次改名留下，这和两条 `plugin options` 同时跑是一样的。
 
 ## 改写 agent 拿到的字节，译文会进下一轮
 
@@ -109,7 +141,8 @@ magpie 的 [hooks 文档](https://github.com/yetone/magpie/blob/main/docs/subsys
 
 2026-10-27 在这台机器上核对过的部分：
 
-- `npm test` 26 项通过。其中「下一轮发给原模型的请求不含译文」用 Responses、Anthropic、Chat、Gemini 四种客户端会落盘的材料组出下一轮请求，断言里面没有译文、记号和网关钥匙，原文、代码和推理还在。对照项证明：若流里的正文已被改成译文，下一轮请求就会带上它。工具轮不会产生翻译任务。另有一条把 `language` 设成 `Français`，断言默认提示词里出现这个名字，并且提示正文没有中文字。
+- `npm test` 33 项通过。其中「下一轮发给原模型的请求不含译文」用 Responses、Anthropic、Chat、Gemini 四种客户端会落盘的材料组出下一轮请求，断言里面没有译文、记号和网关钥匙，原文、代码和推理还在。对照项证明：若流里的正文已被改成译文，下一轮请求就会带上它。工具轮不会产生翻译任务。另有一条把 `language` 设成 `Français`，断言默认提示词里出现这个名字，并且提示正文没有中文字。自定义提示词里的 `{language}` 会换成 `Français`，不认识的 `{tone}` 原样留下。
+- 设置页测试：保存只改这一条插件的 options，`gatewayKey` 等未编辑字段还在，别的插件、`off`、`config`、`prefer` 不动；请求体里夹带的 `gatewayKey` 不会覆盖原值，响应里也没有这把钥匙。没有令牌、错误的 `Origin` / `Referer` / `Host` / `Sec-Fetch-Site` 都是 403，文件不变。监听地址是 `127.0.0.1`。空的配置目录不会被自动写成 `plugins.json`。同一天在浏览器里打开 `http://127.0.0.1:44771/settings`，改语言后点保存，`plugins.json` 里的 `language` 变成新值，页面写着「已写入，下一轮请求生效。」窄窗口（宽 390）没有横向溢出。
 - 另一项测试把翻译模型写成 `community/brand-new-model`、`plugin-grok/grok-4` 这类任意字符串，断言发出去的 `model` 就是这个字符串，并且运行时代码里没有厂商模型表。
 - 语言、自定义提示词、规则覆盖、以及「只开 log / file / webhook、不监听网页」有单独测试。webhook 的 JSON 里没有网关钥匙。
 - 本机 magpie 0.1.1731 的端到端：自定义 OpenAI 兼容上游，规则把 `gpt-work` 指到 `mock/translator-zh`，目标语言设成记号 `LangTokenE2E`。客户端收到的 Chat 流是英文，代码命令仍在原文里。面板上是中文，命令被嵌回。翻译请求再次经过 magpie，正文里有这个语言记号和占位符，没有原始命令，且只发出一次。用客户端实际收到的英文组出的第二轮，经 magpie 转到工作模型的上游请求体里没有中文译文、没有语言记号、没有内部记号。同一轮还看了 `/v1/responses` 和 `/v1/messages`：客户端流是英文，不含译文。这两条协议的「续轮上游请求体」没有再在真实网关上跑，续轮形状由单元测试覆盖。
