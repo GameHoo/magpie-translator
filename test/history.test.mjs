@@ -3,7 +3,8 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
-import { addComparison, publicEntry, recordTranslation } from "../src/history.mjs"
+import { parseHistoryLimit } from "../src/config.mjs"
+import { addComparison, publicEntry, recordTranslation, replaceTranslation } from "../src/history.mjs"
 import { startPanel } from "../src/panel.mjs"
 
 test("历史有上限，公开脚本不含密钥，并且把 < 转义", () => {
@@ -45,6 +46,22 @@ test("历史有上限，公开脚本不含密钥，并且把 < 转义", () => {
   assert.match(again, /other\/model/)
   fs.rmSync(home, { recursive: true, force: true })
   fs.rmSync(ui, { recursive: true, force: true })
+})
+
+test("不保存会清空历史，5000 条是上限", () => {
+  assert.equal(parseHistoryLimit(0), 0)
+  assert.equal(parseHistoryLimit(5000), 5000)
+  assert.equal(parseHistoryLimit(9000), 5000)
+  assert.equal(parseHistoryLimit(undefined), 500)
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-hist0-"))
+  const env = { ...process.env, MAGPIE_TRANSLATOR_HOME: home, MAGPIE_TRANSLATOR_UI: "" }
+  recordTranslation({ id: "keep", original: "one", translation: "一" }, env, 20)
+  const replaced = replaceTranslation("keep", { translation: "改", error: "", ms: 40 }, env)
+  assert.equal(replaced.translation, "改")
+  assert.equal(replaced.status, "done")
+  assert.equal(recordTranslation({ id: "gone", original: "two", translation: "二" }, env, 0), null)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "history.json"), "utf8")), [])
+  fs.rmSync(home, { recursive: true, force: true })
 })
 
 test("显式只要日志时，localPanel 仍打开本机页", async () => {
