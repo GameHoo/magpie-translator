@@ -4,11 +4,14 @@ import fs from "node:fs"
 import http from "node:http"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { parseDisplay } from "./config.mjs"
+import { parseDisplay, parseFlag } from "./config.mjs"
 import { DEFAULT_GATEWAY_KEY, DEFAULT_PANEL_PORT } from "./constants.mjs"
+import { noteCompare } from "./hooks.mjs"
+import { addComparison, recordTranslation } from "./history.mjs"
 import { listModels } from "./models.mjs"
 import { findPlugin, loadSettings, packageRoot, readPluginList, saveSettings } from "./options.mjs"
 import { dataDir, ensureDir, inboxDir, logPath, magpieBaseUrl } from "./paths.mjs"
+import { writeCatalog } from "./publish.mjs"
 import { SETTINGS_PAGE } from "./settings-page.mjs"
 import { persistItem } from "./sinks.mjs"
 import { translateJob } from "./translate.mjs"
@@ -18,7 +21,6 @@ const MAX_ITEMS = 200
 export function startPanel(options = {}) {
   const home = options.home || dataDir()
   const port = options.port ?? Number(process.env.MAGPIE_TRANSLATOR_PORT || DEFAULT_PANEL_PORT)
-  const startupDisplay = parseDisplay(options.display ?? process.env.MAGPIE_TRANSLATOR_DISPLAY)
   const env = { ...process.env, ...options.env, MAGPIE_TRANSLATOR_HOME: home }
   const state = { items: [], clients: new Set(), inflight: new Set() }
   const session = {
@@ -59,23 +61,33 @@ export function startPanel(options = {}) {
     })
     return listening
   }
+  const timers = []
+  const every = (fn, ms) => {
+    const id = setInterval(fn, ms)
+    id.unref?.()
+    timers.push(id)
+  }
   const tick = () => pump(env, state, openHttp).catch((err) => console.error(err))
-  const timer = setInterval(tick, 250)
-  timer.unref?.()
+  every(tick, 250)
+  if (backgroundWork(env)) {
+    every(() => noteCompare(pluginOptions(env, session.locate), env), 2000)
+    every(() => { refreshCatalog(env, session).catch((err) => console.error(err)) }, 60_000)
+    refreshCatalog(env, session).catch((err) => console.error(err))
+  }
   const api = {
     get port() { return boundPort },
     get host() { return boundHost },
     get url() { return boundPort ? `http://127.0.0.1:${boundPort}` : null },
     home,
     close() {
-      clearInterval(timer)
+      for (const id of timers) clearInterval(id)
       for (const client of state.clients) client.end()
       state.clients.clear()
       if (!boundPort) return Promise.resolve()
       return new Promise((done) => server.close(() => done()))
     },
   }
-  if (!startupDisplay.includes("panel")) {
+  if (!httpRequested(options)) {
     tick()
     return Promise.resolve(api)
   }
@@ -83,6 +95,48 @@ export function startPanel(options = {}) {
     tick()
     return api
   })
+}
+
+function httpRequested(options) {
+  const displayGiven = options.display !== undefined
+    || (process.env.MAGPIE_TRANSLATOR_DISPLAY != null && process.env.MAGPIE_TRANSLATOR_DISPLAY !== "")
+  const display = parseDisplay(options.display ?? process.env.MAGPIE_TRANSLATOR_DISPLAY)
+  const local = parseFlag(
+    options.localPanel !== undefined ? options.localPanel : process.env.MAGPIE_TRANSLATOR_LOCAL,
+    false,
+  )
+  if (!displayGiven) return true
+  return display.includes("panel") || local
+}
+
+function backgroundWork(env) {
+  if (process.execArgv.includes("--test") || env.NODE_TEST_CONTEXT) return false
+  return true
+}
+
+function pluginOptions(env, locate) {
+  try {
+    const { list, missing } = readPluginList(env)
+    if (missing) return null
+    return findPlugin(list, env, locate)?.options || null
+  } catch {
+    return null
+  }
+}
+
+async function refreshCatalog(env, session) {
+  let listed = { source: "none", models: [], error: "" }
+  try {
+    listed = await listConfiguredModels(env, session)
+  } catch (err) {
+    listed = { source: "none", models: [], error: String(err?.message || err).slice(0, 180) }
+  }
+  writeCatalog({
+    at: new Date().toISOString(),
+    source: listed.source || "none",
+    models: Array.isArray(listed.models) ? listed.models : [],
+    error: listed.error || "",
+  }, env)
 }
 
 async function handle(req, res, env, state, guard) {
@@ -344,6 +398,10 @@ async function pump(env, state, openHttp) {
 }
 
 async function runJob(job, env, state, openHttp) {
+  if (job.kind === "compare") {
+    await runCompare(job, env)
+    return
+  }
   const display = parseDisplay(job.display)
   const item = {
     id: job.id,
@@ -380,6 +438,7 @@ async function runJob(job, env, state, openHttp) {
   }
   await show()
   let lastSend = 0
+  const started = Date.now()
   try {
     item.translation = await translateJob(job, {
       onDelta(text) {
@@ -397,8 +456,49 @@ async function runJob(job, env, state, openHttp) {
     item.status = "error"
     item.error = err?.message || String(err)
   }
+  item.ms = Date.now() - started
   await show()
+  try {
+    recordTranslation({
+      id: item.id,
+      at: item.at,
+      agent: item.agent,
+      model: item.model,
+      translator: item.translator,
+      language: item.language,
+      ms: item.ms,
+      original: item.original,
+      translation: item.translation,
+      error: item.error,
+      status: item.status,
+      prompt: job.prompt || "",
+      style: job.style || "",
+      masked: job.masked || "",
+      slots: job.slots || [],
+      magpieBaseUrl: job.magpieBaseUrl || "",
+    }, env, job.historyLimit)
+  } catch (err) {
+    console.error(err)
+  }
   await persistItem(env, item, display, job.webhookUrl || "")
+}
+
+async function runCompare(job, env) {
+  const started = Date.now()
+  let translation = ""
+  let error = ""
+  try {
+    translation = await translateJob(job)
+  } catch (err) {
+    error = err?.message || String(err)
+  }
+  addComparison(job.entryId, {
+    id: job.id,
+    translator: job.translator || "",
+    translation,
+    error,
+    ms: Date.now() - started,
+  }, env)
 }
 
 const PAGE = `<!doctype html>
