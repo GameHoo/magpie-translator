@@ -1,11 +1,12 @@
 import "./preload.mjs"
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { test } from "bun:test"
 import { packageRoot } from "../src/options.mjs"
+import { noteGatewayActivity } from "../src/paths.mjs"
 import { enqueue, processingDir, recoverProcessing } from "../src/queue.mjs"
 import { recordTranslation } from "../src/history.mjs"
 import { alive, ensureWorker, processOnce } from "../src/worker.mjs"
@@ -29,18 +30,35 @@ function useHome(home) {
   delete process.env.MAGPIE_TRANSLATOR_PARENT_PID
 }
 
+function processTable() {
+  try {
+    return execFileSync("ps", ["axeww", "-o", "pid=,command="], {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+    })
+  } catch {
+    return ""
+  }
+}
+
 function liveWorkers(home) {
+  const needle = `MAGPIE_TRANSLATOR_HOME=${home}`
   const pids = []
-  for (const name of fs.readdirSync("/proc")) {
-    if (!/^\d+$/.test(name)) continue
-    let cmd = ""
-    try { cmd = fs.readFileSync(`/proc/${name}/cmdline`, "utf8") } catch { continue }
-    if (!cmd.includes("worker.mjs")) continue
-    let env = ""
-    try { env = fs.readFileSync(`/proc/${name}/environ`).toString("utf8") } catch { continue }
-    if (env.includes(`MAGPIE_TRANSLATOR_HOME=${home}`)) pids.push(Number(name))
+  for (const line of processTable().split("\n")) {
+    const trimmed = line.trim()
+    if (!trimmed.includes("worker.mjs") || !trimmed.includes(needle)) continue
+    const pid = Number(trimmed.split(/\s+/, 1)[0])
+    if (pid > 0) pids.push(pid)
   }
   return pids
+}
+
+function processText(pid) {
+  for (const line of processTable().split("\n")) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith(`${pid} `)) return trimmed
+  }
+  return ""
 }
 
 function killHome(home) {
@@ -83,7 +101,7 @@ test("真实工人进程做完一条任务，第二个 ensureWorker 不再另起
   })
   try {
     process.env.SENTINEL_SECRET = "do-not-pass"
-    writePlugins(home, { language: "English" })
+    writePlugins(home, { language: "English", feedQuietMs: 0, feedMinIntervalMs: 0 })
     enqueue({
       id: "spawn-1",
       at: "2026-10-27T00:00:00.000Z",
@@ -103,7 +121,7 @@ test("真实工人进程做完一条任务，第二个 ensureWorker 不再另起
     })
     assert.ok(lock?.pid)
     assert.equal(alive(lock.pid), true)
-    const environ = fs.readFileSync(`/proc/${lock.pid}/environ`).toString("utf8")
+    const environ = processText(lock.pid)
     assert.equal(environ.includes("SENTINEL_SECRET"), false)
     assert.equal(environ.includes("MAGPIE_TRANSLATOR_GATEWAY_KEY"), false)
     assert.match(environ, new RegExp(`MAGPIE_TRANSLATOR_PARENT_PID=${process.pid}`))
@@ -561,3 +579,66 @@ test("历史写完到收尾之间收到 SIGTERM，重放不再发 webhook", asyn
     fs.rmSync(home, { recursive: true, force: true })
   }
 }, 20000)
+
+test("网关还在动时不把摘要写进 plugins.json", async () => {
+  const home = tempHome()
+  useHome(home)
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      return Response.json({ choices: [{ message: { content: "安静后才出现" } }] })
+    },
+  })
+  const ticker = setInterval(() => noteGatewayActivity(process.env), 100)
+  try {
+    writePlugins(home, { language: "English", feedQuietMs: 800, feedMinIntervalMs: 0 })
+    enqueue({
+      id: "quiet-1",
+      at: "2026-10-27T00:00:00.000Z",
+      translator: "mock/zh",
+      language: "简体中文",
+      original: "Hello from the quiet test.",
+      masked: "Hello from the quiet test.",
+      slots: [],
+      magpieBaseUrl: `http://127.0.0.1:${server.port}`,
+      translateTimeoutMs: 10000,
+      historyLimit: 20,
+      display: ["log"],
+    }, process.env)
+    assert.equal(spawnWorker(), true)
+    const row = await waitFor(() => {
+      try {
+        const rows = JSON.parse(fs.readFileSync(path.join(home, "history.json"), "utf8"))
+        return rows[0]?.translation === "安静后才出现" ? rows[0] : null
+      } catch { return null }
+    })
+    assert.ok(row)
+    const started = Date.now()
+    while (Date.now() - started < 1000) {
+      const list = JSON.parse(fs.readFileSync(path.join(home, "magpie", "plugins.json"), "utf8"))
+      assert.equal(list.plugins[0].options.feed, undefined)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    clearInterval(ticker)
+    const feed = await waitFor(() => {
+      try {
+        const list = JSON.parse(fs.readFileSync(path.join(home, "magpie", "plugins.json"), "utf8"))
+        return list.plugins[0].options.feed?.entries?.[0]?.translation === "安静后才出现"
+          ? list.plugins[0].options.feed
+          : null
+      } catch { return null }
+    }, 8000)
+    assert.equal(feed.entries[0].translation, "安静后才出现")
+  } finally {
+    clearInterval(ticker)
+    killHome(home)
+    server.stop(true)
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+}, 20000)
+
+test("找工人进程不读 proc", () => {
+  const src = fs.readFileSync(new URL("./spawn.test.mjs", import.meta.url), "utf8")
+  assert.equal(src.includes("/" + "proc/"), false)
+})

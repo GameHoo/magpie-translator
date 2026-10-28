@@ -18,7 +18,31 @@ export function gatewayKeyFromEnv(env = process.env) {
   return typeof key === "string" && key.trim() ? key.trim() : ""
 }
 
-// 只请求一次。超时和 5xx 不再由插件重试：重试会把一次本来已经很长的转述再拉长一倍。
+// 模型调用本身只发一次。连接被掐断时由工人把任务放回收件箱，4xx 和模型错误不重试。
+export const CONNECT_ATTEMPTS = 6
+
+const CONN_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "EPIPE", "ECONNABORTED", "UND_ERR_SOCKET"])
+
+export function connectBackoff(attempt) {
+  const n = Math.max(1, Number(attempt) || 1)
+  return Math.min(10_000, 1000 * 2 ** Math.min(n - 1, 4))
+}
+
+export function connectionFailure(err) {
+  if (!err || err.name === "StopWorker" || err.name === "TimeoutError" || err.name === "AbortError") return false
+  const status = Number(err.status)
+  if (status >= 400 && status < 500) return false
+  const codes = []
+  let cur = err
+  for (let depth = 0; depth < 5 && cur; depth += 1) {
+    if (cur.code) codes.push(String(cur.code))
+    cur = cur.cause
+  }
+  if (codes.some((code) => CONN_CODES.has(code))) return true
+  const msg = `${err.message || ""} ${err.cause?.message || ""}`
+  return /ECONNRESET|ECONNREFUSED|socket hang up|socket closed|other side closed|The socket connection was closed|Failed to connect|Unable to connect/i.test(msg)
+}
+
 export async function translateJob(job, opts = {}) {
   const timeoutMs = timeoutFor(job, opts)
   const raw = await translateOnce(job, opts, timeoutMs)

@@ -7,11 +7,11 @@ import { gatewayKeyFor } from "./auth.mjs"
 import { presentation } from "./config.mjs"
 import { recordTranslation, replaceTranslation, addComparison, findHistory, hasSeen, markDelivered, markSeen, restoreFeed, wasDelivered, writePublicFeed } from "./history.mjs"
 import { findPlugin, pluginPresence, pluginTurnedOff, readPluginList, syncHostSurface } from "./options.mjs"
-import { dataDir, ensureDir, magpieBaseUrl, writeAtomic } from "./paths.mjs"
+import { dataDir, ensureDir, magpieBaseUrl, noteGatewayActivity, writeAtomic } from "./paths.mjs"
 import { HEARTBEAT_MS, PUBLISH_WAIT_REASONS, STALE_MS, beatIsStale, lockIsStale, pidAlive, publishBackoff, shouldExitAfterPublish, workerToken } from "./proc.mjs"
-import { claimCompare, finishClaim, holdCompare, queueDepth, recoverProcessing, takeJob, touchClaim } from "./queue.mjs"
+import { claimCompare, enqueue, finishClaim, holdCompare, queueDepth, queueWaitMs, recoverProcessing, replayJournal, takeJob, touchClaim } from "./queue.mjs"
 import { persistItem } from "./sinks.mjs"
-import { translateJob } from "./translate.mjs"
+import { CONNECT_ATTEMPTS, connectBackoff, connectionFailure, translateJob } from "./translate.mjs"
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const WORKER_SCRIPT = fileURLToPath(new URL("./worker.mjs", import.meta.url))
@@ -284,6 +284,8 @@ function scrub(job) {
   delete clean.ownerToken
   delete clean.heartbeat
   delete clean.gatewayKey
+  delete clean.notBefore
+  delete clean.connAttempts
   return clean
 }
 
@@ -324,6 +326,7 @@ async function holdAfterRecord(env) {
 
 export async function runQueued(job, env = process.env, opts = {}) {
   const claim = job?.__claim
+  const attempts = Number(job?.connAttempts) || 0
   const clean = scrub(job)
   if (clean.id && (findHistory(clean.id, env) || wasDelivered(clean.id, env))) {
     finishClaim(claim, env)
@@ -345,10 +348,25 @@ export async function runQueued(job, env = process.env, opts = {}) {
     if (err?.name === "StopWorker" || (ac.signal.aborted && (pluginShouldExit(env) || lockLost(opts)))) {
       throw stopError()
     }
-    error = String(err?.message || err).slice(0, 500)
+    if (connectionFailure(err) && attempts + 1 < CONNECT_ATTEMPTS) {
+      try {
+        enqueue({
+          ...clean,
+          connAttempts: attempts + 1,
+          notBefore: Date.now() + connectBackoff(attempts + 1),
+        }, env)
+        finishClaim(claim, env)
+        return { requeued: true }
+      } catch {
+        error = String(err?.message || err).slice(0, 500)
+      }
+    } else {
+      error = String(err?.message || err).slice(0, 500)
+    }
   } finally {
     stopWatch()
     releaseBeat()
+    noteGatewayActivity(env)
   }
   const entry = {
     ...clean,
@@ -462,11 +480,13 @@ export async function processCompare(env = process.env, opts = {}) {
     stopWatch()
     releaseBeat()
     releaseHold()
+    noteGatewayActivity(env)
     if (finished) finishClaim(claim, env)
   }
 }
 
 export async function processOnce(env = process.env, opts = {}) {
+  replayJournal(env)
   recoverProcessing(env)
   restoreFeed(env, opts.historyLimit)
   const job = takeJob(env)
@@ -514,6 +534,7 @@ async function loop() {
       if (pluginShouldExit()) break
       if (!parentGone() && stopRequested(dir)) break
       let did = false
+      let holdFeed = false
       try {
         did = await processOnce(process.env, { lockLost: () => lost })
       } catch (err) {
@@ -522,7 +543,9 @@ async function loop() {
       }
       if (queueDepth() === 0) {
         let published = { wrote: false, reason: "empty" }
-        try { published = syncHostSurface() } catch { published = { wrote: false, reason: "error" } }
+        const publishOpts = parentGone() ? { debounceMs: 0, minIntervalMs: 0 } : {}
+        try { published = syncHostSurface(process.env, publishOpts) } catch { published = { wrote: false, reason: "error" } }
+        holdFeed = !parentGone() && (published.reason === "debounce" || published.reason === "rate")
         const waiting = PUBLISH_WAIT_REASONS.includes(published.reason)
         if (waiting) {
           if (!retrySince) retrySince = Date.now()
@@ -538,7 +561,8 @@ async function loop() {
           continue
         }
       } else if (parentGone()) {
-        await sleep(50)
+        const deferred = queueWaitMs()
+        await sleep(deferred > 0 ? Math.min(deferred, 1000) : 50)
         continue
       }
       if (did) idle = 0
@@ -546,7 +570,12 @@ async function loop() {
       if (pluginShouldExit()) break
       if (!parentGone() && stopRequested(dir)) break
       if (!did && pluginTurnedOff()) break
-      if (!parentGone() && idle > 40) break
+      const deferred = queueWaitMs()
+      if (deferred > 0) {
+        await sleep(Math.min(deferred, 500))
+        continue
+      }
+      if (!parentGone() && idle > 40 && !holdFeed) break
       await sleep(parentGone() ? 50 : 500)
     }
   } finally {

@@ -6,11 +6,12 @@ import path from "node:path"
 import { test } from "bun:test"
 import { gatewayKeyPath } from "../src/auth.mjs"
 import { FEED_BUDGET, addComparison, findHistory, hasSeen, markSeen, publicFeed, recordTranslation, replaceTranslation, writePublicFeed } from "../src/history.mjs"
-import { packageRoot, syncHostSurface } from "../src/options.mjs"
-import { enqueue, INBOX_CAP, finishClaim, listInbox, processingDir, recoverProcessing, takeJob, touchClaim } from "../src/queue.mjs"
+import { FEED_MIN_INTERVAL_MS, FEED_QUIET_MS, packageRoot, syncHostSurface } from "../src/options.mjs"
+import { enqueue, INBOX_CAP, finishClaim, journalPath, listInbox, processingDir, queueWaitMs, recoverProcessing, replayJournal, takeJob, touchClaim } from "../src/queue.mjs"
 import { minimalEnv } from "../src/worker.mjs"
 import { alive, parentGone, processCompare, processOnce, refreshWorkerLock, runQueued, shouldExitAfterPublish, sweepDeadLocks, workerLaunch } from "../src/worker.mjs"
 import { PUBLISH_RETRY_LIMIT_MS, publishBackoff, workerToken } from "../src/proc.mjs"
+import { CONNECT_ATTEMPTS, connectBackoff, connectionFailure } from "../src/translate.mjs"
 
 function tempHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "translator-durable-"))
@@ -553,4 +554,127 @@ test("进行中的错误赶上已有成功时，不覆盖也不发 webhook", asy
     server.stop(true)
     fs.rmSync(home, { recursive: true, force: true })
   }
+})
+
+test("网关还忙着，或者距上次写入太近时，不改 plugins.json", () => {
+  assert.equal(FEED_QUIET_MS, 60_000)
+  assert.equal(FEED_MIN_INTERVAL_MS, 180_000)
+  const home = tempHome()
+  const file = writePlugins(home, { language: "English" })
+  const before = fileId(file)
+  recordTranslation({
+    id: "row-1",
+    original: "Hello there from the model.",
+    translation: "你好",
+    status: "done",
+    translator: "mock/zh",
+    at: "2026-10-27T00:00:00.000Z",
+  }, process.env, 20)
+  const busy = syncHostSurface(process.env, { now: 100_000, activityAt: 90_000 })
+  assert.equal(busy.reason, "debounce")
+  assert.equal(fileId(file), before)
+  const quiet = syncHostSurface(process.env, { now: 160_000, activityAt: 90_000 })
+  assert.equal(quiet.wrote, true)
+  assert.equal(quiet.reason, "feed")
+  recordTranslation({
+    id: "row-2",
+    original: "Second sentence from the model.",
+    translation: "第二句",
+    status: "done",
+    translator: "mock/zh",
+    at: "2026-10-27T00:00:01.000Z",
+  }, process.env, 20)
+  const rated = syncHostSurface(process.env, { debounceMs: 0, now: 170_000, activityAt: 0 })
+  assert.equal(rated.reason, "rate")
+  assert.equal(pluginsText(file).includes("第二句"), false)
+  const later = syncHostSurface(process.env, { debounceMs: 0, now: 160_000 + FEED_MIN_INTERVAL_MS, activityAt: 0 })
+  assert.equal(later.wrote, true)
+  assert.match(pluginsText(file), /第二句/)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("收件箱日志能把没写完的任务补回去", () => {
+  const home = tempHome()
+  const env = { ...process.env }
+  delete env.MAGPIE_TRANSLATOR_LOCK_TOKEN
+  const body = job({ id: "from-journal" })
+  fs.mkdirSync(home, { recursive: true })
+  fs.writeFileSync(journalPath(env), `${JSON.stringify({ at: 1, job: body })}\n`)
+  assert.equal(replayJournal(env, 10_000), 1)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, "inbox", "from-journal.json"), "utf8")).id, "from-journal")
+  assert.equal(fs.existsSync(journalPath(env)), false)
+  const young = job({ id: "still-writing" })
+  fs.writeFileSync(journalPath(env), `${JSON.stringify({ at: 50_000, job: young })}\n`)
+  assert.equal(replayJournal(env, 51_000), 0)
+  assert.equal(fs.existsSync(path.join(home, "inbox", "still-writing.json")), false)
+  assert.match(fs.readFileSync(journalPath(env), "utf8"), /still-writing/)
+  enqueue(job({ id: "queued-ok" }), env)
+  assert.match(fs.readFileSync(journalPath(env), "utf8"), /queued-ok/)
+  assert.equal(fs.existsSync(path.join(home, "inbox", "queued-ok.json")), true)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test("连接被掐断会放回收件箱，4xx 只记一次失败", async () => {
+  assert.equal(connectionFailure(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })), true)
+  assert.equal(connectionFailure(Object.assign(new Error("The socket connection was closed unexpectedly"), { code: "UND_ERR_SOCKET" })), true)
+  assert.equal(connectionFailure(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" })), true)
+  const http = new Error("翻译模型返回 HTTP 400")
+  http.status = 400
+  assert.equal(connectionFailure(http), false)
+  const timeout = new Error("The operation timed out.")
+  timeout.name = "TimeoutError"
+  assert.equal(connectionFailure(timeout), false)
+  assert.equal(connectBackoff(1), 1000)
+  assert.equal(connectBackoff(2), 2000)
+  assert.equal(connectBackoff(5), 10_000)
+
+  const home = tempHome()
+  const env = { ...process.env }
+  delete env.MAGPIE_TRANSLATOR_LOCK_TOKEN
+  enqueue(job({ id: "reset-1" }), env)
+  const taken = takeJob(env)
+  let calls = 0
+  const reset = async () => {
+    calls += 1
+    const err = new Error("socket hang up")
+    err.code = "ECONNRESET"
+    throw err
+  }
+  const deferred = await runQueued(taken, env, { fetchImpl: reset })
+  assert.equal(deferred.requeued, true)
+  assert.equal(calls, 1)
+  assert.equal(fs.existsSync(path.join(home, "history.json")), false)
+  const again = JSON.parse(fs.readFileSync(path.join(home, "inbox", "reset-1.json"), "utf8"))
+  assert.equal(again.connAttempts, 1)
+  assert.ok(again.notBefore > Date.now())
+  assert.equal(takeJob(env), null)
+  assert.ok(queueWaitMs(env) > 0)
+  again.notBefore = 0
+  fs.writeFileSync(path.join(home, "inbox", "reset-1.json"), `${JSON.stringify(again)}\n`)
+  const done = await processOnce(env, {
+    fetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: "恢复了" } }] }), {
+      headers: { "content-type": "application/json" },
+    }),
+  })
+  assert.equal(done, true)
+  assert.equal(findHistory("reset-1", env).translation, "恢复了")
+  assert.equal(findHistory("reset-1", env).error, "")
+
+  enqueue(job({ id: "denied-1" }), env)
+  let denied = 0
+  await processOnce(env, {
+    fetchImpl: async () => {
+      denied += 1
+      return new Response("no", { status: 400 })
+    },
+  })
+  assert.equal(denied, 1)
+  assert.match(findHistory("denied-1", env).error, /HTTP 400/)
+  assert.equal(fs.existsSync(path.join(home, "inbox", "denied-1.json")), false)
+
+  enqueue(job({ id: "gave-up", connAttempts: CONNECT_ATTEMPTS - 1 }), env)
+  await processOnce(env, { fetchImpl: reset })
+  assert.match(findHistory("gave-up", env).error, /socket hang up/)
+  assert.equal(fs.existsSync(path.join(home, "inbox", "gave-up.json")), false)
+  fs.rmSync(home, { recursive: true, force: true })
 })

@@ -12,7 +12,7 @@
 
 ## 它是什么
 
-[magpie](https://github.com/yetone/magpie) 的插件。这个包还没有进官方的 [magpie-community](https://github.com/magpie-community/plugins) 插件列表。magpie 把 hook 停在 10 秒，也没有给插件用的长任务接口，页面也读不到插件自己的数据目录。翻译记录页显示的是工人写进这个插件 options 的一份短摘要。摘要的文字变了才写，先等它稳定 3 秒，并且 15 秒内最多写一次。每次这样写入都会让 magpie 的 hook 宿主重启一次。独立安装接受这个重启。在 magpie 能不重启宿主就显示插件数据、或做完一次长任务之前，这个包留在本仓库。
+[magpie](https://github.com/yetone/magpie) 的插件。这个包还没有进官方的 [magpie-community](https://github.com/magpie-community/plugins) 插件列表。magpie 把 hook 停在 10 秒，也没有给插件用的长任务接口，页面也读不到插件自己的数据目录。翻译记录页显示的是工人写进这个插件 options 的一份短摘要。摘要的文字变了才写，而且要等网关安静 60 秒，两次写入至少隔 3 分钟。每次这样写入都会让 magpie 的 hook 宿主重启一次。独立安装接受这个重启。在 magpie 能不重启宿主就显示插件数据、或做完一次长任务之前，这个包留在本仓库。
 
 核心不是「翻译」，而是一层通用的**转述层**：
 
@@ -319,13 +319,21 @@ magpie plugin list                       # 查看插件名
 
 也可以在 magpie 的 **插件 → 发现 → 非官方插件 · GitHub** 里找到并安装：magpie 会搜索打了 `magpie-plugin` topic 的仓库（不含 fork 和已归档仓库，最多每十分钟刷新一次）。
 
-开关与更新：
+开关：
 
 ```bash
 magpie plugin off magpie-translator      # 关闭
 magpie plugin on  magpie-translator      # 打开
-magpie plugin update                     # 更新所有插件
 ```
+
+已经装过的 GitHub 插件，`magpie plugin add` 不会换成新的，`magpie plugin update` 也不会更新 GitHub 来源。升级要先卸再装：
+
+```bash
+magpie plugin rm github:GameHoo/magpie-translator
+magpie plugin add github:GameHoo/magpie-translator
+```
+
+0.1.0 会另起一个 `panel.mjs` 进程。卸掉插件不会让它退出。升级之后如果翻译面板还在，把这个 `panel.mjs` 进程结束掉。
 
 > 如果提示 `no plugin`，改用 `magpie plugin list` 印出的名字：从 GitHub 装的是 `github:GameHoo/magpie-translator`，从本地目录装的是那条路径，发布到社区仓库之后是 `@magpie-community/page-translator`。下面命令里的名字请换成这一行。
 
@@ -428,8 +436,8 @@ Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning th
 - **`onResponse` 只入队。** 模型调用在 `src/worker.mjs`，经本机 magpie 网关，等待时间是 `translateTimeoutMs`（默认 120 秒，最长 600 秒）。hook 的返回值会被丢掉，客户端字节已经写完。`onRequest` 不改请求。两者都在 `src/hooks.mjs`。`magpie plugin list` 仍固定印 `async gateway hook onRequest`，那是 magpie 写死的句子。
 - **没有 middleware。** 经过网关的字节保持原样。Codex 的 `response.completed` 如果本身没有正文，插件仍然看不到这一轮。
 - **页面在沙箱里**：iframe，`connect-src 'none'`，没有内联脚本，也不能 `fetch`。它只能 `magpie.read` `providers:list` 和 `usage:summary`。对比和重试写的是一小份 `_compare`，不会把 feed 发回去，并且按 UTF-8 字节计算大小。
-- **magpie 把 hook 停在最多 10 秒**（`host.js` 里的 `gatewayTimeout`，本包不把这个值设成 10 秒）。真实转述要 12～105 秒。页面不能发网络请求，也不能读插件文件。工具调用的时限是 55 秒，而且结果会回到正在对话的 agent。没有给插件用的定时或后台任务接口。所以工人脱离 hook 的中止信号。加载 hook 时会把它拉起来，新任务也会。同一时间只有一个工人。锁是 `worker.lock` 里的随机 token 和心跳：每 2 秒把新心跳写到临时文件再换名，而且只在 token 仍是自己的时候换；超过 8 秒没有心跳才算空锁。超过 8 秒的 `worker.lock.dead.*` 会在拿到锁或放开锁之后删掉。这个包不会向工人发信号。代码更新时写 `worker.stop`，当前工人做完手头的任务后自己退出。父进程退出后，工人先做完手头的任务，再把队列排空，队列空了才写摘要，然后自己退出。摘要如果还在等（防抖、频率、冲突、读失败或写失败），会退避，最多再试 20 秒。锁被别人拿走时，正在进行的请求会中止，认领留到心跳变旧。插件关掉，或者 `plugins.json` 里已经没有这个插件，工人就退出。设置保存如果发现文件已经被改过，页面会说明这次没有写入。收件箱最多 100 条，多出来的会记进日志，并在翻译记录页上列出来。同一个任务 id 只记一次历史，webhook 也只发一次。同 id 已经成功时，后来的错误不会盖掉那条记录。认领文件只有 token 是自己的才刷新或删除。它拿到的环境只有路径、家目录、配置目录、父进程号和这把锁的 token，没有网关密钥。
-- **翻译记录页读的是 options 里的摘要。** 这是 magpie 已经给页面的读取方式。摘要变了才写进 `plugins.json`，先稳定 3 秒，15 秒最多一次。真写了，下一次网关请求会重启 hook 宿主。内容相同就不碰文件。因为每次更新都会重启宿主，这个包没有提交到官方列表。
+- **magpie 把 hook 停在最多 10 秒**（`host.js` 里的 `gatewayTimeout`，本包不把这个值设成 10 秒）。真实转述要 12～105 秒。页面不能发网络请求，也不能读插件文件。工具调用的时限是 55 秒，而且结果会回到正在对话的 agent。没有给插件用的定时或后台任务接口。所以工人脱离 hook 的中止信号。加载 hook 时会把它拉起来，新任务也会。同一时间只有一个工人。锁是 `worker.lock` 里的随机 token 和心跳：每 2 秒把新心跳写到临时文件再换名，而且只在 token 仍是自己的时候换；超过 8 秒没有心跳才算空锁。超过 8 秒的 `worker.lock.dead.*` 会在拿到锁或放开锁之后删掉。这个包不会向工人发信号。代码更新时写 `worker.stop`，当前工人做完手头的任务后自己退出。magpie 还在时，摘要要等网关安静 60 秒，并且距上次写入至少 3 分钟，避免一轮对话里反复重启宿主。父进程退出后，工人先做完手头的任务，再把队列排空，然后马上写一次摘要并退出。这次写入如果撞上冲突、读失败或写失败，会退避，最多再试 20 秒。网关连接被重置、拒绝或中途断开时，任务放回收件箱再试，最多 6 次；HTTP 4xx 和模型错误只记一次。入队先把任务追加到 `inbox-journal.jsonl` 并 fsync，再写收件箱文件。锁被别人拿走时，正在进行的请求会中止，认领留到心跳变旧。插件关掉，或者 `plugins.json` 里已经没有这个插件，工人就退出。设置保存如果发现文件已经被改过，页面会说明这次没有写入。收件箱最多 100 条，多出来的会记进日志，并在翻译记录页上列出来。同一个任务 id 只记一次历史，webhook 也只发一次。同 id 已经成功时，后来的错误不会盖掉那条记录。认领文件只有 token 是自己的才刷新或删除。它拿到的环境只有路径、家目录、配置目录、父进程号和这把锁的 token，没有网关密钥。
+- **翻译记录页读的是 options 里的摘要。** 这是 magpie 已经给页面的读取方式。摘要变了才写进 `plugins.json`，网关要先安静 60 秒（`feedQuietMs`），两次写入至少隔 3 分钟（`feedMinIntervalMs`）。真写了，下一次网关请求会重启 hook 宿主。内容相同就不碰文件。因为每次更新都会重启宿主，这个包没有提交到官方列表。
 - **对比和重试**读 options 里的 `_compare`，工人自己做，不必再等一条回复。同一个 nonce 用独占文件认领，结果写入历史之后才记为做过。做的过程中崩溃，下次还会再做。模型返回的错误记下来之后，不再做第二次。
 - **出错不影响原流程**：插件出了任何问题，agent 照样拿到原文。
 
@@ -452,19 +460,19 @@ Rewrite the user's text into plain, easy-to-read {language}. Keep the meaning th
 命令行写入会整体替换。要么把完整 JSON 一起写进去，要么改用设置面板。
 
 **记录显示「失败」或「超时」？**
-先看卡片上的错误信息。确认翻译模型在 magpie 里能用，必要时把超时调大，然后点「重试」或「换个模型重试」。
+先看卡片上的错误信息。确认翻译模型在 magpie 里能用，必要时把超时调大，然后点「重试」或「换个模型重试」。网关连接被重置、拒绝或中途断开时，任务会放回收件箱再试，最多 6 次。HTTP 4xx 和模型返回的错误只记一次。
 
 **中文回复没有被翻译？**
 原文已经是目标语言时默认跳过。如果想把它也改写得更直白，把「原文已是目标语言时跳过」关掉。
 
 **点了「对比」或「重试」没反应？**
-页面把一小份 `_compare` 写进配置。宿主重载 hook，工人接着做，不必再等一条无关的回复。做完后摘要写回 options，列表会出现这一条。摘要要先稳定 3 秒，所以不会在点击的同一瞬间出现。
+页面把一小份 `_compare` 写进配置。宿主重载 hook，工人接着做，不必再等一条无关的回复。做完后摘要写回 options，列表会出现这一条。网关要先安静 60 秒，所以不会在点击的同一瞬间出现。
 
 **`magpie plugin list` 显示 `async gateway hook onRequest`？**
 这行字是 magpie 对所有异步 hook 写死的，它不读取插件导出的函数名。`onResponse` 把最终正文放进收件箱就返回。模型调用在脱离的工人里。`onRequest` 不改请求体，只认出插件自己发出的翻译请求。
 
 **打开页面时记录是空的，但 `history.json` 里有？**
-页面读的是 options 里的 `feed`，不是数据目录。工人会把摘要写进去。如果插件刚做完、还在 3 秒稳定期里，或者 15 秒内已经写过一次，列表会晚一点更新。宿主重启之后，新的工人会把还没发布的摘要补上。
+页面读的是 options 里的 `feed`，不是数据目录。工人会把摘要写进去。刚做完的翻译要等网关安静 60 秒，而且 3 分钟内最多写一次，所以列表会晚一点更新。magpie 退出时，工人会把还没发布的摘要补上再退出。
 
 **Codex 用 ChatGPT 账号登录时抓不到正文？**
 插件不再改流。如果 `response.completed` 不带正文，插件就看不到这一轮。详见 [docs/DESIGN.md](docs/DESIGN.md)。

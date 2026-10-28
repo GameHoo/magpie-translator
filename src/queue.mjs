@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
-import { recordDropped } from "./history.mjs"
+import { findHistory, readDropped, recordDropped, wasDelivered } from "./history.mjs"
 import { dataDir, ensureDir, writeAtomic } from "./paths.mjs"
 import { beatIsStale, workerToken } from "./proc.mjs"
 
@@ -41,16 +41,87 @@ function capInbox(env, keepName) {
   if (dropped.length) recordDropped(env, dropped)
 }
 
+export function journalPath(env = process.env) {
+  return path.join(dataDir(env), "inbox-journal.jsonl")
+}
+
+const JOURNAL_REPLAY_MS = 2000
+
+function appendJournal(env, job) {
+  const file = journalPath(env)
+  ensureDir(path.dirname(file))
+  const line = `${JSON.stringify({ at: Date.now(), job })}\n`
+  const fd = fs.openSync(file, "a", 0o600)
+  try {
+    fs.writeSync(fd, line)
+    fs.fsyncSync(fd)
+  } finally {
+    try { fs.closeSync(fd) } catch { /* 已经关上 */ }
+  }
+}
+
 export function enqueue(job, env = process.env) {
   const dir = inboxDir(env)
   ensureDir(dir)
   const id = String(job?.id || "")
   if (!id) throw new Error("任务没有 id")
   const name = `${id}.json`
+  try { appendJournal(env, job) } catch { /* 收件箱文件仍会写 */ }
   capInbox(env, name)
   const file = path.join(dir, name)
-  writeAtomic(file, `${JSON.stringify(job)}\n`)
-  return file
+  const text = `${JSON.stringify(job)}\n`
+  let last
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      writeAtomic(file, text)
+      return file
+    } catch (err) {
+      last = err
+    }
+  }
+  throw last
+}
+
+function jobIsLanded(id, env) {
+  if (fs.existsSync(path.join(inboxDir(env), `${id}.json`))) return true
+  if (fs.existsSync(path.join(processingDir(env), `${id}.json`))) return true
+  if (findHistory(id, env) || wasDelivered(id, env)) return true
+  return readDropped(env).some((item) => item.id === id)
+}
+
+// 钩子在写完日志、还没写完收件箱时退出，下一轮把那条补回去。刚写下的行先留着。
+export function replayJournal(env = process.env, now = Date.now()) {
+  const file = journalPath(env)
+  let text = ""
+  try { text = fs.readFileSync(file, "utf8") } catch { return 0 }
+  const keep = []
+  let n = 0
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue
+    let parsed
+    try { parsed = JSON.parse(line) } catch { continue }
+    const job = parsed?.job
+    const id = String(job?.id || "")
+    const at = Number(parsed?.at) || 0
+    if (!id) continue
+    if (now - at < JOURNAL_REPLAY_MS) {
+      keep.push(line)
+      continue
+    }
+    if (jobIsLanded(id, env)) continue
+    try {
+      ensureDir(inboxDir(env))
+      writeAtomic(path.join(inboxDir(env), `${id}.json`), `${JSON.stringify(job)}\n`)
+      n += 1
+    } catch {
+      keep.push(line)
+    }
+  }
+  if (keep.length) writeAtomic(file, `${keep.join("\n")}\n`)
+  else {
+    try { fs.unlinkSync(file) } catch { /* 已经不在 */ }
+  }
+  return n
 }
 
 export function listInbox(env = process.env) {
@@ -115,9 +186,12 @@ export function takeJob(env = process.env) {
   const dir = inboxDir(env)
   const processing = processingDir(env)
   ensureDir(processing)
+  const now = Date.now()
   for (const name of listInbox(env)) {
     if (!name.endsWith(".json") || name.startsWith("compare-")) continue
     const from = path.join(dir, name)
+    const peeked = readJson(from)
+    if (peeked && Number(peeked.notBefore) > now) continue
     const to = path.join(processing, name)
     try { fs.renameSync(from, to) } catch { continue }
     const job = readJson(to)
@@ -132,6 +206,19 @@ export function takeJob(env = process.env) {
     return job
   }
   return null
+}
+
+export function queueWaitMs(env = process.env, now = Date.now()) {
+  let wait = 0
+  for (const name of listInbox(env)) {
+    if (!name.endsWith(".json") || name.startsWith("compare-")) continue
+    const job = readJson(path.join(inboxDir(env), name))
+    const due = Number(job?.notBefore) || 0
+    if (due <= now) return 0
+    const gap = due - now
+    wait = wait === 0 ? gap : Math.min(wait, gap)
+  }
+  return wait
 }
 
 export function touchClaim(claim, env = process.env) {

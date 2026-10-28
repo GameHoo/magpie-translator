@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url"
 import { writeGatewayKey } from "./auth.mjs"
 import { DEFAULT_DISPLAY, DEFAULT_LANGUAGE, parseDisplay, parseFlag, parseHistoryLimit, parseTimeout } from "./config.mjs"
 import { publicFeed, readDropped, readHistory } from "./history.mjs"
-import { dataDir, writeAtomic } from "./paths.mjs"
+import { dataDir, gatewayActivityAt, writeAtomic } from "./paths.mjs"
 
 export const MAX_NOTE = 4000
 export const MAX_RULES = 40
@@ -386,8 +386,17 @@ export function saveSettings(input, env = process.env, locate = {}) {
   return { spec: entry.spec, file, changed, options: view, preserved: view.preserved }
 }
 
-export const FEED_DEBOUNCE_MS = 3000
-export const FEED_MIN_INTERVAL_MS = 15000
+export const FEED_QUIET_MS = 60_000
+export const FEED_DEBOUNCE_MS = FEED_QUIET_MS
+export const FEED_MIN_INTERVAL_MS = 3 * 60_000
+
+function chosenMs(override, configured, fallback, max) {
+  if (Number.isFinite(override)) return Math.min(max, Math.max(0, override))
+  if (configured == null || configured === "") return fallback
+  const n = Number(configured)
+  if (!Number.isFinite(n) || n < 0) return fallback
+  return Math.min(max, Math.floor(n))
+}
 
 const feedPending = new Map()
 
@@ -455,10 +464,8 @@ function commitPluginKeys(file, env, locate, change, beforeWrite) {
 }
 
 // 把公开摘要写进 plugins.json 的 options.feed。内容相同就不碰文件，避免宿主重启。
-// 真有变化时先等摘要稳定，并且两次写入至少隔一段时间。密钥顺手搬出 plugins.json。
+// 网关还在忙，或者距上次写入太近，就先不写。密钥顺手搬出 plugins.json。
 export function syncHostSurface(env = process.env, opts = {}) {
-  const debounce = Number.isFinite(opts.debounceMs) ? opts.debounceMs : FEED_DEBOUNCE_MS
-  const interval = Number.isFinite(opts.minIntervalMs) ? opts.minIntervalMs : FEED_MIN_INTERVAL_MS
   const now = Number.isFinite(opts.now) ? opts.now : Date.now()
   const locate = opts.locate || {}
   let loaded
@@ -467,6 +474,9 @@ export function syncHostSurface(env = process.env, opts = {}) {
   const entry = findPlugin(loaded.list, env, locate)
   if (!entry) return { wrote: false, reason: "absent" }
   const options = entry.options && typeof entry.options === "object" && !Array.isArray(entry.options) ? entry.options : {}
+  const quietOverride = Number.isFinite(opts.debounceMs) ? opts.debounceMs : (Number.isFinite(opts.quietMs) ? opts.quietMs : undefined)
+  const debounce = chosenMs(quietOverride, options.feedQuietMs, FEED_QUIET_MS, 10 * 60_000)
+  const interval = chosenMs(Number.isFinite(opts.minIntervalMs) ? opts.minIntervalMs : undefined, options.feedMinIntervalMs, FEED_MIN_INTERVAL_MS, 30 * 60_000)
 
   const rawKey = typeof options.gatewayKey === "string" ? options.gatewayKey.trim() : ""
   if (rawKey) writeGatewayKey(rawKey, env)
@@ -491,7 +501,8 @@ export function syncHostSurface(env = process.env, opts = {}) {
     pending = { hash, since: now }
     feedPending.set(dir, pending)
   }
-  if (now - pending.since < debounce) {
+  const activity = Number.isFinite(opts.activityAt) ? opts.activityAt : gatewayActivityAt(env)
+  if (now - pending.since < debounce || (debounce > 0 && activity > 0 && now - activity < debounce)) {
     if (dropKey) return commitPluginKeys(loaded.file, env, locate, { dropKey }, opts.beforeWrite)
     return { wrote: false, reason: "debounce" }
   }

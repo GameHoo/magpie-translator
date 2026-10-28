@@ -6,7 +6,7 @@ import { sameLanguage } from "./language.mjs"
 import { maskCode } from "./mask.mjs"
 import { matchRule } from "./match.mjs"
 import { isOwnRequest } from "./own.mjs"
-import { magpieBaseUrl } from "./paths.mjs"
+import { magpieBaseUrl, noteGatewayActivity } from "./paths.mjs"
 import { enqueue } from "./queue.mjs"
 import { skipReason } from "./turn.mjs"
 import { ensureWorker } from "./worker.mjs"
@@ -16,12 +16,13 @@ import { ensureWorker } from "./worker.mjs"
 // onResponse 只把任务写进数据目录就返回。翻译本身要 12–105 秒，
 // 而宿主把 hook 停在 gatewayTimeoutMs（最多 10 秒，host.js）。
 // 脱离的工人做完后，把一份有大小上限的摘要写进 options.feed。
-// 摘要没变就不碰 plugins.json。hook 自己不写这个文件。
+// 网关安静 60 秒、并且距上次写入至少 3 分钟才写。hook 自己不写这个文件。
 
 if (process.env.MAGPIE_TRANSLATOR_NO_SPAWN !== "1") ensureWorker()
 
 export async function onRequest(body, ctx) {
   try {
+    noteGatewayActivity()
     if (ctx && typeof ctx === "object") {
       if (!ctx.state || typeof ctx.state !== "object") ctx.state = {}
       ctx.state.own = isOwnRequest(body)
@@ -33,6 +34,7 @@ export async function onRequest(body, ctx) {
 
 export async function onResponse(reply, ctx) {
   try {
+    noteGatewayActivity()
     if (!ctx || reply == null || typeof reply !== "object") return
     if (ctx.state?.own || isOwnRequest(ctx.request)) return
     enqueueCurrent(reply, ctx)
